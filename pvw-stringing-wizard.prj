@@ -1,0 +1,16 @@
+;;; VLisp project file [V2.0] pvw-stringing-wizard saved to:[e:\AutoLisp Tools] at:[9/10/2025]
+(VLISP-PROJECT-LIST 
+  :NAME
+  pvw-stringing-wizard
+  :OWN-LIST
+  ("pvw-stringing-wizard")
+  :FAS-DIRECTORY
+  nil
+  :TMP-DIRECTORY
+  nil
+  :PROJECT-KEYS
+  (:BUILD (:standard))
+  :CONTEXT-ID
+  :AUTOLISP
+)
+;;; EOF
