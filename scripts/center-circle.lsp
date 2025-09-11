@@ -1,33 +1,6 @@
 ;;; ==========================================================
-;;; Center Circle              ;; Init                        ;; If first segment from block, use quadrant point on block; otherwise from previous center directly
-                        (if (= centerPrev center) 
-                          (progn
-                            (setq quadPt (calculate-quadrant-point 
-                                           centerPrev
-                                           centerNext
-                                           blockRadius
-                                         )
-                            )
-                            (setq firstQuadPt quadPt) ; Store first quadrant point
-                            (setq polyPoints (append polyPoints (list quadPt)))
-                          )
-                          (setq polyPoints (append polyPoints (list centerPrev)))
-                        )
-                        ;; Add the target center point to polyline
-                        (setq polyPoints (append polyPoints (list centerNext)))
-                        (princ 
-                          (strcat "\nPoint added to polyline: " 
-                                  (rtos (car centerNext) 2 4)
-                                  ", "
-                                  (rtos (cadr centerNext) 2 4)
-                          )
-                        )
-                        (setq centerPrev centerNext)g loop
-              (setq centerPrev center)
-              (setq blockRadius (calculate-block-radius blockEnt center))
-              (setq opt "")
-              (setq polyPoints (list)) ; Initialize polyline points listl
-;;; Description: Select an object and draw a 6" radius circle at its center
+;;; Center Circle Tool - Solar String Planning
+;;; Description: Select objects to create string paths with terminal blocks and polylines
 ;;; Author: GitHub Copilot
 ;;; Date: September 11, 2025
 ;;; ==========================================================
@@ -37,14 +10,15 @@
                        blockEnt blockRadius quadPt obj2 center2 opt centerPrev objNext 
                        centerNext termBlockEnt termBlockRadius termQuadPt lastLineEnt 
                        lineData lineEnd lineStart newLineData ss testLine i 
-                       continueLoop polyPoints firstQuadPt
+                       continueLoop lineEntities firstQuadPt oldPeditAccept
                       ) 
   ;; Save system variables and set up error handling
-  (setq oldlayer      (getvar "CLAYER")
-        oldecho       (getvar "CMDECHO")
-        doc           (vla-get-ActiveDocument (vlax-get-Acad-Object))
-        *undoStarted* nil
-        oldErr        *error*
+  (setq oldlayer       (getvar "CLAYER")
+        oldecho        (getvar "CMDECHO")
+        oldPeditAccept (getvar "PEDITACCEPT")
+        doc            (vla-get-ActiveDocument (vlax-get-Acad-Object))
+        *undoStarted*  nil
+        oldErr         *error*
   )
 
   ;; Define error handler for cleanup
@@ -55,6 +29,7 @@
                   (if *undoStarted* (vla-EndUndoMark doc))
                   (if oldlayer (setvar "CLAYER" oldlayer))
                   (if oldecho (setvar "CMDECHO" oldecho))
+                  (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
                   (setq *error* oldErr)
                   (princ)
                 )
@@ -66,6 +41,7 @@
     (progn 
       ;; Set up environment
       (setvar "CMDECHO" 0)
+      (setvar "PEDITACCEPT" 1) ; Auto-accept PEDIT prompts like PolyTools
       (vla-StartUndoMark doc)
       (setq *undoStarted* T)
 
@@ -109,6 +85,7 @@
                 (setq centerPrev center)
                 (setq blockRadius (calculate-block-radius blockEnt center))
                 (setq opt "")
+                (setq lineEntities (list)) ; Track line entities for joining
                 (while (not (wcmatch (strcase opt) "T")) 
                   (princ "\nSelect next object (Enter to continue, T to terminate): ")
                   (setq objNext (car (entsel)))
@@ -122,19 +99,25 @@
                       (if (null centerNext) 
                         (princ "\nCannot determine center of that object; skipping.")
                         (progn 
-                          ;; If first segment from block, use quadrant point on block; otherwise from previous center directly
+                          ;; Calculate line start point (from block edge or previous center)
                           (if (= centerPrev center) 
-                            (setq quadPt (calculate-quadrant-point 
-                                           centerPrev
-                                           centerNext
-                                           blockRadius
-                                         )
+                            ;; First line from block - use quadrant point
+                            (setq lineStart (calculate-quadrant-point 
+                                              centerPrev
+                                              centerNext
+                                              blockRadius
+                                            )
                             )
-                            (setq quadPt centerPrev)
+                            ;; Subsequent lines from previous center
+                            (setq lineStart centerPrev)
                           )
-                          (command "LINE" quadPt centerNext "")
+
+                          ;; Create line from start point to next center
+                          (command "PLINE" lineStart centerNext "")
+                          (setq lineEntities (append lineEntities (list (entlast))))
+
                           (princ 
-                            (strcat "\nLine drawn to: " 
+                            (strcat "\nLine created to: " 
                                     (rtos (car centerNext) 2 4)
                                     ", "
                                     (rtos (cadr centerNext) 2 4)
@@ -149,68 +132,121 @@
                     (setq opt (getstring "\nPress Enter to add another, or type T to terminate: "))
                   )
                 )
-                ;; When terminating, insert StringTermMinus block and adjust last line
-                (if 
-                  (and (wcmatch (strcase opt) "T") 
-                       centerPrev
-                       (not (equal centerPrev center))
-                  )
+                ;; After while loop ends, handle line joining first, then termination
+                (if (>= (length lineEntities) 1) 
                   (progn 
-                    ;; Insert StringTermMinus block at last center point
-                    (command "INSERT" 
-                             "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
-                             centerPrev 1.0 1.0 0
-                    )
-                    (setq termBlockEnt (entlast))
-                    (setq termBlockRadius (calculate-block-radius 
-                                            termBlockEnt
-                                            centerPrev
-                                          )
-                    )
-
-                    ;; Get the last line entity and modify its endpoint
-                    (setq lastLineEnt (entlast))
-                    ;; Find the line that ends at centerPrev (we need to search back)
-                    (setq ss (ssget "X" '((0 . "LINE"))))
-                    (if ss 
+                    ;; Join the line entities into a polyline using PolyTools technique
+                    (if (> (length lineEntities) 1) 
                       (progn 
-                        (setq i (1- (sslength ss)))
-                        (while (>= i 0) 
-                          (setq testLine (ssname ss i))
-                          (setq lineData (entget testLine))
-                          (setq lineEnd (cdr (assoc 11 lineData)))
-                          (if 
-                            (and lineEnd 
-                                 (< (distance lineEnd centerPrev) 0.001)
-                            ) ; Very close to centerPrev
-                            (progn 
-                              (setq lineStart (cdr (assoc 10 lineData)))
-                              ;; Calculate quadrant point on term block from line direction
-                              (setq termQuadPt (calculate-quadrant-point 
-                                                 centerPrev
-                                                 lineStart
-                                                 termBlockRadius
-                                               )
-                              )
-                              ;; Modify the line endpoint
-                              (setq newLineData (subst (cons 11 termQuadPt) 
-                                                       (assoc 11 lineData)
-                                                       lineData
-                                                )
-                              )
-                              (entmod newLineData)
-                              (setq i -1) ; Exit loop
-                            )
-                            (setq i (1- i))
+                        ;; Create selection set with all line entities
+                        (setq ss (ssadd))
+                        (foreach ent lineEntities 
+                          (ssadd ent ss)
+                        )
+
+                        ;; Use PEDIT with multiple selection to join - PolyTools method
+                        (command "_.pedit" "_m" ss "" "_j" "" "")
+                        (princ "\nLines joined into polyline using PEDIT multiple.")
+                      )
+                      (progn 
+                        ;; Single line - convert to polyline
+                        (if (= (length lineEntities) 1) 
+                          (progn 
+                            (command "_.pedit" (car lineEntities) "" "")
+                            (princ "\nSingle line converted to polyline.")
                           )
                         )
                       )
                     )
-                    (princ "\nStringTermMinus block inserted and line adjusted.")
+
+                    ;; Now handle termination block insertion and polyline adjustment
+                    (if 
+                      (and (wcmatch (strcase opt) "T") 
+                           centerPrev
+                           (not (equal centerPrev center))
+                      )
+                      (progn 
+                        ;; Insert StringTermMinus block at last center point
+                        (command "INSERT" 
+                                 "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
+                                 centerPrev 1.0 1.0 0
+                        )
+                        (setq termBlockEnt (entlast))
+                        (setq termBlockRadius (calculate-block-radius 
+                                                termBlockEnt
+                                                centerPrev
+                                              )
+                        )
+
+                        ;; Get the polyline that was just created (should be before the block)
+                        (setq polylineEnt (entprev termBlockEnt))
+
+                        ;; Verify it's a polyline, if not search backwards
+                        (while 
+                          (and polylineEnt 
+                               (not 
+                                 (equal (cdr (assoc 0 (entget polylineEnt))) 
+                                        "LWPOLYLINE"
+                                 )
+                               )
+                          )
+                          (setq polylineEnt (entprev polylineEnt))
+                        )
+
+                        (if polylineEnt 
+                          (progn 
+                            ;; Calculate the quadrant point on the termination block
+                            ;; Direction should be from the second-to-last point toward the block center
+                            (setq polyData (entget polylineEnt))
+                            (setq vertices (list))
+
+                            ;; Collect all vertex points
+                            (foreach item polyData 
+                              (if (= (car item) 10) 
+                                (setq vertices (append vertices (list (cdr item))))
+                              )
+                            )
+
+                            ;; Get the second-to-last point for direction calculation
+                            (if (> (length vertices) 1) 
+                              (setq secondLastPt (nth (- (length vertices) 2) 
+                                                      vertices
+                                                 )
+                              )
+                              (setq secondLastPt (nth 0 vertices)) ; Fallback to first point
+                            )
+
+                            ;; Calculate quadrant point
+                            (setq termQuadPt (calculate-quadrant-point 
+                                               centerPrev
+                                               secondLastPt
+                                               termBlockRadius
+                                             )
+                            )
+
+                            ;; Update the polyline's last vertex using PEDIT
+                            (command "_.pedit" polylineEnt "_e" termQuadPt "")
+                            (princ "\nPolyline endpoint adjusted to StringTermMinus block quadrant.")
+                          )
+                          (princ "\nWarning: Could not find polyline to adjust endpoint.")
+                        )
+                      )
+                    )
                   )
-                  (princ "\nChain terminated. Ready for next starting point.")
+                  (princ "\nNo line segments created.")
                 )
               )
+            )
+          )
+        )
+
+        ;; Ask if user wants to create another string
+        (if continueLoop 
+          (progn 
+            (princ "\nCreate another string? (Y/N): ")
+            (setq opt (getstring))
+            (if (not (wcmatch (strcase opt) "Y*")) 
+              (setq continueLoop nil)
             )
           )
         )
@@ -220,6 +256,7 @@
       (if *undoStarted* (vla-EndUndoMark doc))
       (if oldlayer (setvar "CLAYER" oldlayer))
       (if oldecho (setvar "CMDECHO" oldecho))
+      (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
       (setq *error* oldErr)
     )
   )
