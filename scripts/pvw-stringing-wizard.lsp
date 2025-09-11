@@ -1,5 +1,5 @@
 ;;; ==========================================================
-;;; PV Stringing Wizard - v2.3 (Hardened + Interactive)
+;;; PV Stringing Wizard - v2.4 (Hardened + Interactive + Improvements)
 ;;; Author: Brandon + ChatGPT
 ;;; Description:
 ;;;   Automates PV stringing workflow:
@@ -16,9 +16,6 @@
 ;;;   - Explicit geometric tolerance
 ;;; ==========================================================
 
-;; Ensure Visual LISP COM is available
-(vl-load-com)
-
 ;; ------------------------
 ;; Utility / Config
 ;; ------------------------
@@ -28,37 +25,59 @@
 
 (defun nearly-zero (x) (< (abs x) *pv-eps*))
 
+;; Robust dot / cross helpers (2D) -- symbol names cannot start with a digit in AutoLISP
+(defun pvw-dot2d (a b) (+ (* (car a) (car b)) (* (cadr a) (cadr b))))
+(defun pvw-cross2d (a b) (- (* (car a) (cadr b)) (* (cadr a) (car b))))
+
+;; Improved point-on-segment test tolerant to slight skew & returns param t (or nil)
+(defun point-param-on-seg (p1 p2 pt / v w vlen2 t dist cross)
+  (setq v (mapcar '- p2 p1)
+        w (mapcar '- pt p1)
+        vlen2 (+ (* (car v) (car v)) (* (cadr v) (cadr v)))
+  )
+  (if (<= vlen2 0.0)
+    nil
+    (progn
+  (setq t (/ (pvw-dot2d w v) vlen2))
+      (if (and (>= t -0.0005) (<= t 1.0005))
+        (progn
+          (setq cross (pvw-cross2d v w)
+                dist  (if (<= vlen2 0.0) 1e9 (/ (abs cross) (sqrt vlen2)))
+          )
+          (if (< dist (* 25 *pv-eps*)) t)
+        )
+      )
+    )
+  )
+)
+
 (defun in-model-space-p () (> (getvar "CVPORT") 1))
 
 ;; Safe input wrappers
-(defun safe-entsel (msg / res) 
+(defun safe-entsel (msg) 
   (princ (strcat "\n" msg))
-  (setq res (vl-catch-all-apply 'entsel (list)))
-  (if (vl-catch-all-error-p res) 
-    nil
-    (car res) ; entsel returns (ename point)
+  (vl-catch-all-apply 
+    (function (lambda () (car (entsel))))
   )
 )
 
-(defun safe-getint (msg / res) 
-  (setq res (vl-catch-all-apply 'getint (list (strcat "\n" msg))))
-  (if (vl-catch-all-error-p res) 
-    nil
-    (if (or (null res) (< res 0)) nil res)
-  )
+(defun safe-getint (msg / v) 
+  (setq v (getint (strcat "\n" msg)))
+  (if (or (null v) (< v 0)) nil v)
 )
 
-(defun safe-getstring (msg / res) 
-  (setq res (vl-catch-all-apply 'getstring (list T (strcat "\n" msg))))
-  (if (vl-catch-all-error-p res) 
-    nil
-    (if (or (null res) (= res "")) nil res)
-  )
+;; Debug flag & logger
+(if (not (boundp '*pvw-debug*)) (setq *pvw-debug* nil))
+(defun pvw:dbg (s /)
+  (if *pvw-debug* (princ (strcat "\n[PVW] " s)))
 )
 
-(defun safe-getkword (msg / res) 
-  (setq res (vl-catch-all-apply 'getkword (list msg)))
-  (if (vl-catch-all-error-p res) nil res)
+;; Validate non-negative integer counts
+(defun pvw:valid-count? (n) (and (numberp n) (>= n 0) (= n (fix n))))
+
+(defun safe-getstring (msg / s) 
+  (setq s (getstring T (strcat "\n" msg)))
+  (if (or (null s) (= s "")) nil s)
 )
 
 ;; Get Effective (dynamic) block name, falling back to Name
@@ -75,7 +94,7 @@
 ;; Build a selection set of INSERTs matching a given EffectiveName (robust for dynamic blocks)
 (defun build-mod-ss-by-effective-name (effName / all i v eff ss en) 
   (setq ss (ssadd))
-  (if (setq all (ssget "_X" '((0 . "INSERT") (410 . "Model")))) 
+  (if (setq all (ssget "_X" '((0 . "INSERT")))) 
     (progn 
       (setq i 0)
       (while (< i (sslength all)) 
@@ -102,67 +121,81 @@
   (and en (= "INSERT" (cdr (assoc 0 (entget en)))) (ssmemb en modSSet))
 )
 
-;; Helper: pick a valid module of current type; returns ENAME or NIL (cancel)
-(defun pvw:pick-module (promptText modSSet / ent) 
-  (while 
-    (progn 
-      (setq ent (safe-entsel promptText))
-      (cond 
-        ((null ent) (setq ent nil) nil) ; user canceled -> break returning nil
-        ((not (is-mod-insert? ent modSSet))
-         (princ "\nPlease pick a valid module of the selected type.")
-         T
-        ) ; continue loop
-        (T nil) ; valid -> exit loop
-      )
-    )
-  )
-  ent
-)
-
-;; Debug printer (toggle with (setq *pvw-debug* T))
-(defun pvw:dbg (msg) (if *pvw-debug* (princ (strcat "\n[PVW] " msg))))
-
 ;; ------------------------
 ;; Geometry helpers
 ;; ------------------------
 
-(defun collinear? (p1 p2 pt / v1 v2 cross) 
-  (setq v1    (mapcar '- p2 p1)
-        v2    (mapcar '- pt p1)
-        cross (- (* (car v1) (cadr v2)) (* (cadr v1) (car v2)))
-  )
-  (nearly-zero cross)
-)
+;; Horizontal test used for label logic
+(defun horizontal? (p1 p2) (nearly-zero (- (cadr p1) (cadr p2))))
 
-(defun horizontal? (p1 p2) 
-  (nearly-zero (- (cadr p1) (cadr p2)))
-)
-
-(defun within-bounds? (p1 p2 pt) 
-  (and (<= (min (car p1) (car p2)) (car pt) (max (car p1) (car p2))) 
-       (<= (min (cadr p1) (cadr p2)) (cadr pt) (max (cadr p1) (cadr p2)))
-  )
-)
-
-(defun sort-points-along-line (p1 p2 pts) 
-  (vl-sort pts (function (lambda (a b) (< (distance p1 a) (distance p1 b)))))
-)
-
-(defun get-collinear-modules (p1 p2 modSSet / result i eData insPt) 
-  (setq result nil
-        i      0
-  )
-  (while (< i (sslength modSSet)) 
+;; Return list of (t param point) sorted by param along segment; filtering by perpendicular distance
+(defun get-collinear-modules (p1 p2 modSSet / i eData insPt t acc)
+  (setq i 0 acc nil)
+  (while (< i (sslength modSSet))
     (setq eData (entget (ssname modSSet i))
           insPt (cdr (assoc 10 eData))
+          t     (point-param-on-seg p1 p2 insPt)
     )
-    (if (and (collinear? p1 p2 insPt) (within-bounds? p1 p2 insPt)) 
-      (setq result (cons insPt result))
-    )
+    (if t (setq acc (cons (list t insPt) acc)))
     (setq i (1+ i))
   )
-  (sort-points-along-line p1 p2 result)
+  (setq acc (vl-sort acc '(lambda (a b) (< (car a) (car b)))))
+  ;; map extract points
+  (mapcar 'cadr acc)
+)
+
+;; Adjust module list to match required count with interactive options
+(defun pvw:adjust-modules (found required p1 p2 modSSet / modulesFound need ans p2e interior firstPt lastPt)
+  (setq modulesFound (length found)
+        need         required)
+  (while (/= modulesFound need)
+    (princ (strcat "\nFound " (itoa modulesFound) " module(s); expected " (itoa need) "."))
+    (initget "A R M C")
+    (setq ans (getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
+    (cond
+      ((or (null ans) (= ans "C")) (princ "\nCanceled.") (exit))
+      ((= ans "A") (setq need modulesFound))
+      ((= ans "R")
+       (while (progn (setq p2e (safe-entsel "Repick LAST module:"))
+                     (if (not (is-mod-insert? p2e modSSet)) (princ "\nPick valid module.") T)))
+       (if (null p2e) (progn (princ "\nCanceled.") (exit)))
+       (setq p2    (inspt-of p2e)
+             found (get-collinear-modules p1 p2 modSSet))
+       (if (not (equal (car found) p1 *pv-eps*)) (setq found (cons p1 (vl-remove p1 found))))
+       (if (not (equal (car (last found)) p2 *pv-eps*)) (setq found (append (vl-remove p2 found) (list p2))))
+       (setq modulesFound (length found))
+      )
+      ((= ans "M")
+       (cond
+         ((> modulesFound need) ; trim
+          (setq firstPt (car found) lastPt (car (last found)) interior (reverse (cdr (reverse (cdr found)))))
+          (while (> (+ 2 (length interior)) need)
+            (setq interior (reverse (cdr (reverse interior)))))
+          (setq found        (cons firstPt (append interior (list lastPt)))
+                modulesFound (length found))
+          (princ (strcat "\nTrimmed to " (itoa modulesFound) " module(s)."))
+         )
+         ((< modulesFound need)
+          (princ (strcat "\nNeed to add " (itoa (- need modulesFound)) " module(s). Pick extras (Esc to stop)."))
+          (while (< modulesFound need)
+            (setq p2e (safe-entsel "Pick extra module:"))
+            (if (not (is-mod-insert? p2e modSSet))
+              (progn (princ "\nInvalid/canceled stopping add.") (setq modulesFound need))
+              (progn
+                (setq found (vl-sort (cons (inspt-of p2e) found)
+                                     '(lambda (a b)
+                                        (< (or (point-param-on-seg p1 p2 a) 0.0)
+                                           (or (point-param-on-seg p1 p2 b) 0.0)))))
+                (setq modulesFound (length found))
+              )
+            )
+          )
+         )
+       )
+      )
+    )
+  )
+  found
 )
 
 ;; ------------------------
@@ -171,7 +204,7 @@
 
 (defun draw-and-label-string (ptList strName filletRad labelHeight labelOffset / i p1 
                               p2 segLen maxLen labelPt plObj horiz maxOverall 
-                              overallPt
+                              overallPt layOld
                              ) 
   (setq maxLen     0.0
         maxOverall 0.0
@@ -179,63 +212,52 @@
         overallPt  nil
   )
 
-  (if (> (length ptList) 1) 
-    (progn 
-      ;; Draw polyline
-      (command "._PLINE")
-      (foreach pt ptList (command pt))
-      (command "")
-      (setq plObj (entlast))
+  ;; Draw polyline
+  (command "._PLINE")
+  (foreach pt ptList (command pt))
+  (command "")
+  (setq plObj (entlast))
 
-      ;; Fillet polyline (uses current FILLETRAD)
-      (command "._FILLET" "P" plObj)
-    )
-    ;; Single point: set a reasonable label point above
-    (if ptList 
-      (setq labelPt (list (car (car ptList)) 
-                          (+ (cadr (car ptList)) labelOffset)
-                          0.0
-                    )
-      )
+  ;; Fillet polyline (uses current FILLETRAD)
+  ;; Apply polyline fillets only if radius > 0
+  (if (> filletRad 0.0)
+    (progn (setvar "FILLETRAD" filletRad)
+           (command "._FILLET" "P" plObj)
     )
   )
 
   ;; Find longest horizontal segment (fallback to longest overall)
-  (if (> (length ptList) 1) 
-    (progn 
-      (setq i 0)
-      (while (< (1+ i) (length ptList)) 
-        (setq p1     (nth i ptList)
-              p2     (nth (1+ i) ptList)
-              segLen (distance p1 p2)
-              horiz  (horizontal? p1 p2)
-        )
+  (setq i 0)
+  (while (< (1+ i) (length ptList)) 
+    (setq p1     (nth i ptList)
+          p2     (nth (1+ i) ptList)
+          segLen (distance p1 p2)
+          horiz  (horizontal? p1 p2)
+    )
 
-        (if (and horiz (> segLen maxLen)) 
-          (progn 
-            (setq maxLen segLen)
-            (setq labelPt (list (/ (+ (car p1) (car p2)) 2.0) 
-                                (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
-                                0.0
-                          )
-            )
-          )
+    (if (and horiz (> segLen maxLen)) 
+      (progn 
+        (setq maxLen segLen)
+        (setq labelPt (list (/ (+ (car p1) (car p2)) 2.0) 
+                            (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
+                            0.0
+                      )
         )
-
-        (if (> segLen maxOverall) 
-          (progn 
-            (setq maxOverall segLen)
-            (setq overallPt (list (/ (+ (car p1) (car p2)) 2.0) 
-                                  (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
-                                  0.0
-                            )
-            )
-          )
-        )
-
-        (setq i (1+ i))
       )
     )
+
+    (if (> segLen maxOverall) 
+      (progn 
+        (setq maxOverall segLen)
+        (setq overallPt (list (/ (+ (car p1) (car p2)) 2.0) 
+                              (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
+                              0.0
+                        )
+        )
+      )
+    )
+
+    (setq i (1+ i))
   )
 
   ;; Fallback if no horizontal
@@ -251,33 +273,115 @@
 ;; Command
 ;; ------------------------
 
-(defun c:PVSTRINGS (/ oldlayer oldrad oldecho strLayerName strLayerColor filletRad 
-                    labelHeight labelOffset minusBlockName plusBlockName modBlock 
-                    effName modSSet invCount invNames strCounts modCounts invIndex 
-                    strCount invModCounts strNum strName modulesNeeded invName numMods 
-                    strList *undoStarted* doc idx strIdx oldattdia oldattreq
-                   ) 
+(defun ensure-layer (name color / tbl)
+  (if (not (setq tbl (tblsearch "LAYER" name)))
+    (entmake (list '(0 . "LAYER") (cons 2 name) (cons 62 color) '(70 . 0)))
+  )
+  (setvar "CLAYER" name)
+)
+
+;; Default configuration plist (user can override by altering *pvw-config* before load)
+(if (not (boundp '*pvw-config*))
+  (setq *pvw-config*
+        (list :layer "PV-STRINGS" :layer-color 131 :fillet 12.0 :label-height 6.0
+              :label-offset 6.0 :minus-block "PV_MINUS" :plus-block "PV_PLUS"
+              :minus-block-path "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg"
+              :plus-block-path "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermPlus.dwg"
+              :auto-create-blocks T))
+)
+
+(defun pvw:cfg (key)
+  (cadr (member key *pvw-config*))
+)
+
+;; Load block from file path or create simple placeholder
+(defun pvw:ensure-block (blockName blockPath autoCreate / blockExists)
+  (setq blockExists (tblsearch "BLOCK" blockName))
+  (cond
+    ;; Block already exists
+    (blockExists 
+     (pvw:dbg (strcat "Block " blockName " already exists"))
+     T)
+    
+    ;; Try to load from file path
+    ((and blockPath (findfile blockPath))
+     (pvw:dbg (strcat "Loading " blockName " from " blockPath))
+     (command "._-INSERT" blockPath '(0 0 0) "" "" "" "")
+     (command "._EXPLODE" (entlast))
+     (command "._-BLOCK" blockName '(0 0 0) (ssget "_L") "")
+     T)
+    
+    ;; Auto-create simple placeholder
+    (autoCreate
+     (pvw:dbg (strcat "Creating placeholder block " blockName))
+     (pvw:create-simple-block blockName)
+     T)
+    
+    ;; Skip if missing
+    (T 
+     (pvw:dbg (strcat "Block " blockName " not found - skipping"))
+     nil)
+  )
+)
+
+;; Create a simple text-based placeholder block
+(defun pvw:create-simple-block (blockName / txtSize)
+  (setq txtSize 6.0)
+  (entmake (list '(0 . "BLOCK") '(2 . "temp_block") '(70 . 0) '(10 0.0 0.0 0.0)))
+  (entmake (list '(0 . "TEXT") '(1 . blockName) '(8 . "0") 
+                 '(10 0.0 0.0 0.0) (cons 40 txtSize) '(50 . 0.0) '(7 . "STANDARD")))
+  (entmake '(0 . "ENDBLK"))
+  (command "._-BLOCK" blockName '(0 0 0) (entlast) "")
+)
+
+;; Error wrapper function (moved to top level to avoid nested defun issues)
+(defun pvw:err-wrapper (msg / *undoStarted* doc oldlayer oldrad oldecho oldErr)
+  ; Note: this is a generic wrapper - actual cleanup vars set in calling context
+  (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*")))
+    (princ (strcat "\nError: " msg))
+  )
+  (princ)
+)
+
+(defun c:PVSTRINGS (/ oldlayer oldrad oldecho strLayerName strLayerColor filletRad
+                    labelHeight labelOffset minusBlockName plusBlockName modBlock
+                    effName modSSet invCount invNames strCounts modCounts invIndex
+                    strCount invModCounts strNum strName modulesNeeded invName numMods
+                    strList *undoStarted* doc oldErr tmp answer)
 
   ;; Configurable constants
-  (setq strLayerName   "PV-STRINGS"
-        strLayerColor  131
-        filletRad      12.0
-        labelHeight    6.0
-        labelOffset    6.0 ;; Configurable +/- block names (placeholders)
-        minusBlockName "PV_MINUS"
-        plusBlockName  "PV_PLUS"
+  (setq strLayerName   (pvw:cfg :layer)
+    strLayerColor  (pvw:cfg :layer-color)
+    filletRad      (pvw:cfg :fillet)
+    labelHeight    (pvw:cfg :label-height)
+    labelOffset    (pvw:cfg :label-offset)
+    minusBlockName (pvw:cfg :minus-block)
+    plusBlockName  (pvw:cfg :plus-block)
   )
 
   ;; Save sysvars
-  (setq oldlayer  (getvar "CLAYER")
-        oldrad    (getvar "FILLETRAD")
-        oldecho   (getvar "CMDECHO")
-        oldattdia (getvar "ATTDIA")
-        oldattreq (getvar "ATTREQ")
+  (setq oldlayer (getvar "CLAYER")
+        oldrad   (getvar "FILLETRAD")
+        oldecho  (getvar "CMDECHO")
   )
 
   (setq *undoStarted* nil
         doc           (vla-get-ActiveDocument (vlax-get-Acad-Object))
+  )
+
+  (setq oldErr *error*)
+  (setq *error* 
+    (lambda (msg)
+      (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*")))
+        (princ (strcat "\nError: " msg))
+      )
+      (if *undoStarted* (vla-EndUndoMark doc))
+      (if oldlayer (setvar "CLAYER" oldlayer))
+      (if oldrad (setvar "FILLETRAD" oldrad))
+      (if oldecho (setvar "CMDECHO" oldecho))
+      (setq *error* oldErr)
+      (princ)
+    )
   )
 
   (unwind-protect 
@@ -285,21 +389,29 @@
       ;; Model space guard
       (if (not (in-model-space-p)) 
         (progn 
-          (princ "\n⚠ Please switch to Model Space before running PVSTRINGS.")
+          (princ "\nWARNING: Please switch to Model Space before running PVSTRINGS.")
           (exit)
         )
       )
 
       ;; Setup
       (setvar "CMDECHO" 0)
-      ;; Avoid attribute prompts during -INSERT of +/- blocks
-      (setvar "ATTDIA" 0)
-      (setvar "ATTREQ" 0)
-      (if (tblsearch "LAYER" strLayerName) 
-        (command "._LAYER" "S" strLayerName "")
-        (command "._LAYER" "M" strLayerName "C" strLayerColor strLayerName "")
-      )
+      (ensure-layer strLayerName strLayerColor)
       (setvar "FILLETRAD" filletRad)
+
+      ;; Optional override of key numeric settings
+      (initget "Yes No")
+      (setq answer (getkword "\nOverride defaults for Fillet/Label? [Yes/No] <No>: "))
+      (if (= answer "Yes")
+        (progn
+          (setq tmp (safe-getint (strcat "Fillet radius <" (rtos filletRad 2 2) "): "))
+          (if tmp (setq filletRad tmp) (setvar "FILLETRAD" filletRad))
+          (setq tmp (safe-getint (strcat "Label height <" (rtos labelHeight 2 2) "): "))
+          (if tmp (setq labelHeight tmp))
+          (setq tmp (safe-getint (strcat "Label offset <" (rtos labelOffset 2 2) "): "))
+          (if tmp (setq labelOffset tmp))
+        )
+      )
 
       ;; Single undo mark (ensure we can end it in cleanup)
       (vla-StartUndoMark doc)
@@ -319,70 +431,42 @@
         (progn (princ "\nNo matching modules found.") (exit))
       )
 
-      ;; ------------------------
-      ;; Collect inverter/string info (3-pass input flow)
-      ;; 1) Names for all inverters
-      ;; 2) String counts per inverter
-      ;; 3) Module counts per string (by inverter & string number)
-      ;; ------------------------
-
+      ;; Collect inverter/string info
       (setq invCount (safe-getint "How many inverters? "))
-      (if (null invCount) (progn (princ "\nCanceled or invalid.") (exit)))
+      (if (not (pvw:valid-count? invCount)) (progn (princ "\nCanceled or invalid inverter count.") (exit)))
 
       (setq invNames  nil
             strCounts nil
             modCounts nil
       )
 
-      ;; 1) Inverter names
-      (setq idx 1)
+      (if (not (pvw:valid-count? invCount)) (progn (princ "\nInvalid inverter loop count.") (exit)))
       (repeat invCount 
-        (setq invName (safe-getstring 
-                        (strcat "Enter inverter name #" (itoa idx) " (e.g., A): ")
-                      )
-        )
+        (setq invName (safe-getstring "Enter inverter name (e.g., A): "))
         (if (null invName) (progn (princ "\nCanceled.") (exit)))
-        (setq invNames (append invNames (list invName)))
-        (setq idx (1+ idx))
-      )
 
-      ;; 2) String counts per inverter
-      (foreach invName invNames 
-        (setq strCount (safe-getint 
-                         (strcat "How many strings for inverter " invName "? ")
-                       )
-        )
-        (if (null strCount) (progn (princ "\nCanceled or invalid.") (exit)))
-        (setq strCounts (append strCounts (list strCount)))
-      )
+        (setq strCount (safe-getint (strcat "How many strings for inverter " invName "? ")))
+        (if (not (pvw:valid-count? strCount)) (progn (princ "\nCanceled or invalid string count.") (exit)))
 
-      ;; 3) Module counts for each inverter's strings
-      (setq invIndex -1)
-      (foreach invName invNames 
-        (setq invIndex (1+ invIndex))
-        (setq strCount (nth invIndex strCounts))
         (setq strList nil)
-
-        (setq strIdx 1)
+        (if (not (pvw:valid-count? strCount)) (progn (princ "\nInvalid string repeat count.") (exit)))
         (repeat strCount 
           (setq numMods (safe-getint 
-                          (strcat "Number of modules for " 
+                          (strcat "Number of modules for next string of inverter " 
                                   invName
-                                  "-"
-                                  (itoa strIdx)
                                   ": "
                           )
                         )
           )
-          (if (null numMods) (progn (princ "\nCanceled or invalid.") (exit)))
-          (setq strList (append strList (list numMods)))
-          (setq strIdx (1+ strIdx))
+          (if (not (pvw:valid-count? numMods)) (progn (princ "\nCanceled or invalid module count.") (exit)))
+          ;; use cons for speed, reverse later
+          (setq strList (cons numMods strList))
         )
-
-        ;; modCounts is a list of lists, aligned with invNames/strCounts
+        (setq strList (reverse strList))
+        (setq invNames (append invNames (list invName)))
+        (setq strCounts (append strCounts (list strCount)))
         (setq modCounts (append modCounts (list strList)))
       )
-
 
       ;; ------------------------
       ;; Loop through inverters/strings
@@ -395,11 +479,13 @@
               strNum       0
         )
 
+        (if (not (pvw:valid-count? strCount)) (progn (princ "\nInvalid per-inverter string count.") (exit)))
         (repeat strCount 
           (setq strNum        (1+ strNum)
                 strName       (strcat "STRING " invName "-" (itoa strNum))
                 modulesNeeded (nth (1- strNum) invModCounts)
           )
+          (if (not (pvw:valid-count? modulesNeeded)) (progn (princ "\nInvalid modulesNeeded value.") (exit)))
 
           (princ 
             (strcat "\nNow processing: " 
@@ -413,23 +499,7 @@
           ;; ------------------------
           ;; IMPLEMENTED TODO SECTION (interactive routing)
           ;; ------------------------
-          (let 
-            ((firstModEnt nil) 
-              (lastModEnt nil)
-              (p1 nil)
-              (p2 nil)
-              (foundPts nil)
-              (ptList nil)
-              (ans nil)
-              (modulesFound nil)
-              (need nil)
-              (delta nil)
-              (minusName nil)
-              (plusName nil)
-              (minusPt nil)
-              (plusPt nil)
-              (keepAdding nil)
-            )
+          (let (p1e p2e p1 p2 foundPts ptList minusName plusName minusPt plusPt)
 
             ;; Resolve configurable +/- block names (with defaults if not bound)
             (setq minusName (if (and (boundp 'minusBlockName) minusBlockName) 
@@ -444,152 +514,59 @@
             )
 
             ;; Pick FIRST module
-            (setq firstModEnt (pvw:pick-module 
-                                "Pick FIRST module of the string:"
-                                modSSet
-                              )
+            (while 
+              (progn 
+                (setq p1e (safe-entsel "Pick FIRST module of the string:"))
+                (if (not (is-mod-insert? p1e modSSet)) 
+                  (progn (princ "\nPlease pick a valid module of the selected type.") 
+                         T
+                  )
+                  nil
+                )
+              )
             )
-            (if (null firstModEnt) (progn (princ "\nCanceled.") (exit)))
-            (setq p1 (inspt-of firstModEnt))
+            (if (null p1e) (progn (princ "\nCanceled.") (exit)))
+            (setq p1 (inspt-of p1e))
 
             ;; Pick LAST module
-            (setq lastModEnt (pvw:pick-module 
-                               "Pick LAST module of the string:"
-                               modSSet
-                             )
+            (while 
+              (progn 
+                (setq p2e (safe-entsel "Pick LAST module of the string:"))
+                (if (not (is-mod-insert? p2e modSSet)) 
+                  (progn (princ "\nPlease pick a valid module of the selected type.") 
+                         T
+                  )
+                  nil
+                )
+              )
             )
-            (if (null lastModEnt) (progn (princ "\nCanceled.") (exit)))
-            (setq p2 (inspt-of lastModEnt))
+            (if (null p2e) (progn (princ "\nCanceled.") (exit)))
+            (setq p2 (inspt-of p2e))
 
             ;; Build ordered run along the line (including endpoints)
             (setq foundPts (get-collinear-modules p1 p2 modSSet))
-            ;; Ensure endpoints present and at ends
-            (if (not (equal (car foundPts) p1 *pv-eps*)) 
-              (setq foundPts (cons p1 (vl-remove p1 foundPts)))
-            )
-            (if (not (equal (car (last foundPts)) p2 *pv-eps*)) 
-              (setq foundPts (append (vl-remove p2 foundPts) (list p2)))
-            )
-
-            (setq modulesFound (length foundPts)
-                  need         modulesNeeded
-                  delta        (- modulesFound need)
-            )
-
-            ;; Handle mismatches
-            (while (/= modulesFound need) 
-              (princ 
-                (strcat "\nFound " 
-                        (itoa modulesFound)
-                        " module(s); expected "
-                        (itoa need)
-                        "."
-                )
-              )
-              (initget "A R M C") ; Accept / Repick last / Manual adjust / Cancel
-              (setq ans (safe-getkword 
-                          "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "
-                        )
-              )
-
-              (cond 
-                ;; Cancel
-                ((or (null ans) (= ans "C")) (princ "\nCanceled.") (exit))
-
-                ;; Accept as-is
-                ((= ans "A")
-                 (setq need modulesFound)
-                )
-
-                ;; Repick LAST endpoint and rebuild
-                ((= ans "R")
-                 (setq lastModEnt (pvw:pick-module "Repick LAST module:" modSSet))
-                 (if (null lastModEnt) (progn (princ "\nCanceled.") (exit)))
-                 (setq p2 (inspt-of lastModEnt))
-                 (setq foundPts (get-collinear-modules p1 p2 modSSet))
-                 (if (not (equal (car foundPts) p1 *pv-eps*)) 
-                   (setq foundPts (cons p1 (vl-remove p1 foundPts)))
-                 )
-                 (if (not (equal (car (last foundPts)) p2 *pv-eps*)) 
-                   (setq foundPts (append (vl-remove p2 foundPts) (list p2)))
-                 )
-                 (setq modulesFound (length foundPts)
-                       delta        (- modulesFound need)
-                 )
-                )
-
-                ;; Manual adjust: either trim interior or add extra points
-                ((= ans "M")
-                 (cond 
-                   ;; Trim interior points from the end until count matches (preserve endpoints)
-                   ((> modulesFound need)
-                    (let* 
-                      ((firstPt (car foundPts)) 
-                        (lastPt (car (last foundPts)))
-                        ;; interior = foundPts without first/last
-                        (interior (reverse (cdr (reverse (cdr foundPts)))))
-                      )
-                      (while (> (+ 2 (length interior)) need) 
-                        ;; drop one from the end of interior
-                        (setq interior (reverse (cdr (reverse interior))))
-                      )
-                      (setq foundPts (cons firstPt (append interior (list lastPt))))
-                      (setq modulesFound (length foundPts))
-                      (princ 
-                        (strcat "\nTrimmed to " (itoa modulesFound) " module(s).")
-                      )
-                    )
-                   )
-                   ;; Add more modules by picking them; keep run sorted
-                   ((< modulesFound need)
-                    (princ 
-                      (strcat "\nNeed to add " 
-                              (itoa (- need modulesFound))
-                              " module(s). "
-                              "Pick extra modules on the same line (Esc to stop)."
-                      )
-                    )
-                    (setq keepAdding T)
-                    (while (and keepAdding (< modulesFound need)) 
-                      (setq lastModEnt (safe-entsel 
-                                         "Pick an extra module to include:"
-                                       )
-                      )
-                      (if (not (is-mod-insert? lastModEnt modSSet)) 
-                        (progn (princ "\nInvalid pick or canceled; stopping manual add.") 
-                               (setq keepAdding nil)
-                        ) ; stop adding, return to mismatch prompt
-                        (progn 
-                          (setq foundPts (sort-points-along-line 
-                                           p1
-                                           p2
-                                           (cons (inspt-of lastModEnt) foundPts)
-                                         )
-                          )
-                          (setq modulesFound (length foundPts))
-                        )
-                      )
-                    )
-                   )
-                 )
-                )
-              )
-            )
+            (if (not (equal (car foundPts) p1 *pv-eps*)) (setq foundPts (cons p1 (vl-remove p1 foundPts))))
+            (if (not (equal (car (last foundPts)) p2 *pv-eps*)) (setq foundPts (append (vl-remove p2 foundPts) (list p2))))
+            (setq foundPts (pvw:adjust-modules foundPts modulesNeeded p1 p2 modSSet))
 
             ;; Final list of points to route
             (setq ptList foundPts)
 
-            ;; Insert +/- placeholders if blocks exist (silent skip if missing)
-            (if (and minusName (tblsearch "BLOCK" minusName)) 
-              (progn (setq minusPt (car ptList)) 
-                     (if minusPt 
-                       (command "._-INSERT" minusName minusPt 1.0 1.0 0.0)
-                     )
+            ;; Ensure +/- blocks exist (load from path or create placeholder)
+            (setq minusAvail (pvw:ensure-block minusName (pvw:cfg :minus-block-path) (pvw:cfg :auto-create-blocks))
+                  plusAvail  (pvw:ensure-block plusName (pvw:cfg :plus-block-path) (pvw:cfg :auto-create-blocks)))
+
+            ;; Insert +/- blocks if available
+            (if minusAvail
+              (progn 
+                (setq minusPt (car ptList)) 
+                (if minusPt (command "._-INSERT" minusName minusPt 1.0 1.0 0.0))
               )
             )
-            (if (and plusName (tblsearch "BLOCK" plusName)) 
-              (progn (setq plusPt (car (last ptList))) 
-                     (if plusPt (command "._-INSERT" plusName plusPt 1.0 1.0 0.0))
+            (if plusAvail
+              (progn 
+                (setq plusPt (car (last ptList))) 
+                (if plusPt (command "._-INSERT" plusName plusPt 1.0 1.0 0.0))
               )
             )
 
@@ -609,12 +586,90 @@
       (setvar "CLAYER" oldlayer)
       (setvar "FILLETRAD" oldrad)
       (setvar "CMDECHO" oldecho)
-      (setvar "ATTDIA" oldattdia)
-      (setvar "ATTREQ" oldattreq)
+      (setq *error* oldErr)
     )
   )
   (princ)
 )
 
 (princ "\nType PVSTRINGS to run the PV Stringing Wizard.")
+(princ "\nType PVWCONFIG to configure block paths and settings.")
 (princ)
+
+;; Configuration command
+(defun c:PVWCONFIG (/ choice filePath)
+  (princ "\n=== PV Stringing Wizard Configuration ===")
+  (princ (strcat "\nCurrent minus block: " (pvw:cfg :minus-block)))
+  (princ (strcat "\nCurrent plus block: " (pvw:cfg :plus-block)))
+  (princ (strcat "\nMinus block path: " (if (pvw:cfg :minus-block-path) (pvw:cfg :minus-block-path) "None")))
+  (princ (strcat "\nPlus block path: " (if (pvw:cfg :plus-block-path) (pvw:cfg :plus-block-path) "None")))
+  (princ (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No")))
+  
+  (initget "M P A Q")
+  (setq choice (getkword "\nConfigure [M]inus path / [P]lus path / [A]uto-create toggle / [Q]uit: "))
+  
+  (cond
+    ((= choice "M")
+     (setq filePath (getfiled "Select Minus Block File" "" "dwg" 0))
+     (if filePath
+       (progn
+         (setq *pvw-config* (subst (cons :minus-block-path filePath) 
+                                   (assoc :minus-block-path (apply 'list (pvw:plist->alist *pvw-config*)))
+                                   (apply 'list (pvw:plist->alist *pvw-config*))))
+         (princ (strcat "\nMinus block path set to: " filePath))
+       )
+       (princ "\nCanceled.")
+     )
+    )
+    ((= choice "P")
+     (setq filePath (getfiled "Select Plus Block File" "" "dwg" 0))
+     (if filePath
+       (progn
+         (setq *pvw-config* (subst (cons :plus-block-path filePath) 
+                                   (assoc :plus-block-path (apply 'list (pvw:plist->alist *pvw-config*)))
+                                   (apply 'list (pvw:plist->alist *pvw-config*))))
+         (princ (strcat "\nPlus block path set to: " filePath))
+       )
+       (princ "\nCanceled.")
+     )
+    )
+    ((= choice "A")
+     (setq *pvw-config* (subst (cons :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
+                               (assoc :auto-create-blocks (apply 'list (pvw:plist->alist *pvw-config*)))
+                               (apply 'list (pvw:plist->alist *pvw-config*))))
+     (princ (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No")))
+    )
+  )
+  (princ)
+)
+
+;; Helper to convert plist to alist for easier manipulation
+(defun pvw:plist->alist (plist / result)
+  (while plist
+    (setq result (cons (cons (car plist) (cadr plist)) result)
+          plist  (cddr plist))
+  )
+  (reverse result)
+)
+
+;;; Debug utility (optional): quick paren balance checker for this file once loaded
+(defun c:PVWBALANCE (/ fn txt i ch open close)
+  (setq fn (findfile "stringing-wizard/scripts/pvw-stringing-wizard.lsp"))
+  (if (not fn) (princ "\nFile not found in expected relative path.")
+    (progn
+      (setq txt  (vl-file->string fn)
+            i    0
+            open 0
+            close 0)
+      (while (< i (strlen txt))
+        (setq ch (substr txt (1+ i) 1))
+        (cond ((= ch "(") (setq open (1+ open)))
+              ((= ch ")") (setq close (1+ close))))
+        (setq i (1+ i))
+      )
+      (princ (strcat "\nParens open:" (itoa open) " close:" (itoa close)
+                     (if (= open close) " (balanced)" " (MISMATCH)")))
+    )
+  )
+  (princ)
+)
