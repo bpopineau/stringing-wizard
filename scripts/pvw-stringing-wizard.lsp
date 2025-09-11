@@ -413,6 +413,7 @@
 
 ;; Config setter utility (update or append key in *pvw-config*)
 (defun pvw:set-cfg (key val / src dst k v) 
+  ;; Correct symbol comparison (was '=' which corrupted the plist)
   (setq src *pvw-config*
         dst nil
   )
@@ -421,15 +422,26 @@
           v   (cadr src)
           src (cddr src)
     )
-    (if (= k key) 
+    (if (eq k key) 
       (setq dst (append dst (list k val))
             key nil
-      ) ; mark consumed
+      ) ; mark consumed so we know it was replaced
       (setq dst (append dst (list k v)))
     )
   )
-  (if key (setq dst (append dst (list key val)))) ; key not found, append
+  (if key (setq dst (append dst (list key val)))) ; append if not found
   (setq *pvw-config* dst)
+)
+
+;; Numeric safety helper: ensure value is a non-negative number else default
+(defun pvw:num-or (val def) 
+  (if 
+    (and (numberp val) 
+         (not (vl-catch-all-error-p (vl-catch-all-apply '(lambda () val))))
+    )
+    val
+    def
+  )
 )
 
 (defun c:PVSTRINGS (/ oldlayer oldrad oldecho strLayerName strLayerColor filletRad 
@@ -444,12 +456,27 @@
 
   ;; Configurable constants
   (setq strLayerName   (pvw:cfg :layer)
-        strLayerColor  (pvw:cfg :layer-color)
-        filletRad      (pvw:cfg :fillet)
-        labelHeight    (pvw:cfg :label-height)
-        labelOffset    (pvw:cfg :label-offset)
+        strLayerColor  (pvw:num-or (pvw:cfg :layer-color) 7)
+        filletRad      (pvw:num-or (pvw:cfg :fillet) 0.0)
+        labelHeight    (pvw:num-or (pvw:cfg :label-height) 6.0)
+        labelOffset    (pvw:num-or (pvw:cfg :label-offset) 6.0)
         minusBlockName (pvw:cfg :minus-block)
         plusBlockName  (pvw:cfg :plus-block)
+  )
+  (if (not (numberp filletRad)) 
+    (progn (princ "\n[PVW] WARNING: filletRad not numeric; defaulting to 0.0") 
+           (setq filletRad 0.0)
+    )
+  )
+  (if (not (numberp labelHeight)) 
+    (progn (princ "\n[PVW] WARNING: labelHeight not numeric; defaulting to 6.0") 
+           (setq labelHeight 6.0)
+    )
+  )
+  (if (not (numberp labelOffset)) 
+    (progn (princ "\n[PVW] WARNING: labelOffset not numeric; defaulting to 6.0") 
+           (setq labelOffset 6.0)
+    )
   )
 
   ;; Save sysvars
@@ -679,7 +706,7 @@
 (princ "\nType PVWCONFIG to configure block paths and settings.")
 (princ)
 
-;; Configuration command
+;; Configuration command (fixed cond structure)
 (defun c:PVWCONFIG (/ choice filePath) 
   (princ "\n=== PV Stringing Wizard Configuration ===")
   (princ (strcat "\nCurrent minus block: " (pvw:cfg :minus-block)))
@@ -707,53 +734,56 @@
               (princ (strcat "\nMinus block path set to: " filePath))
        )
      )
-     ((= choice "P") 
-       (setq filePath (getfiled "Select Plus Block File" "" "dwg" 0))
-       (if filePath 
-         (progn (pvw:set-cfg :plus-block-path filePath) 
-                (princ (strcat "\nPlus block path set to: " filePath))
-         )
-       )
-       ((= choice "A") 
-         (pvw:set-cfg :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
-         (princ 
-           (strcat "\nAuto-create blocks: " 
-                   (if (pvw:cfg :auto-create-blocks) "Enabled" "Disabled")
-           )
-         )
+    )
+    ((= choice "P")
+     (setq filePath (getfiled "Select Plus Block File" "" "dwg" 0))
+     (if filePath 
+       (progn (pvw:set-cfg :plus-block-path filePath) 
+              (princ (strcat "\nPlus block path set to: " filePath))
        )
      )
-     (princ)
     )
+    ((= choice "A")
+     (pvw:set-cfg :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
+     (princ 
+       (strcat "\nAuto-create blocks: " 
+               (if (pvw:cfg :auto-create-blocks) "Enabled" "Disabled")
+       )
+     )
+    )
+    ((= choice "Q") (princ "\nNo changes made."))
+  )
+  (princ)
+)
 
-    ;;; Debug utility (optional): quick paren balance checker for this file once loaded
-    (defun c:PVWBALANCE (/ fn txt i ch open close) 
-      (setq fn (findfile "stringing-wizard/scripts/pvw-stringing-wizard.lsp"))
-      (if (not fn) 
-        (princ "\nFile not found in expected relative path.")
-        (progn 
-          (setq txt   (vl-file->string fn)
-                i     0
-                open  0
-                close 0
-          )
-          (while (< i (strlen txt)) 
-            (setq ch (substr txt (1+ i) 1))
-            (cond 
-              ((= ch "(") (setq open (1+ open)))
-              ((= ch ")") (setq close (1+ close)))
-            )
-            (setq i (1+ i))
-          )
-          (princ 
-            (strcat "\nParens open:" 
-                    (itoa open)
-                    " close:"
-                    (itoa close)
-                    (if (= open close) " (balanced)" " (MISMATCH)")
-            )
-          )
+;; Debug utility (optional): quick paren balance checker (top-level)
+(defun c:PVWBALANCE (/ fn txt i ch open close) 
+  (setq fn (findfile "stringing-wizard/scripts/pvw-stringing-wizard.lsp"))
+  (if (not fn) 
+    (princ "\nFile not found in expected relative path.")
+    (progn 
+      (setq txt   (vl-file->string fn)
+            i     0
+            open  0
+            close 0
+      )
+      (while (< i (strlen txt)) 
+        (setq ch (substr txt (1+ i) 1))
+        (cond 
+          ((= ch "(") (setq open (1+ open)))
+          ((= ch ")") (setq close (1+ close)))
+        )
+        (setq i (1+ i))
+      )
+      (princ 
+        (strcat "\nParens open:" 
+                (itoa open)
+                " close:"
+                (itoa close)
+                (if (= open close) " (balanced)" " (MISMATCH)")
         )
       )
-      (princ)
     )
+  )
+  (princ)
+)
