@@ -31,12 +31,14 @@
 (if (not (boundp 'acExtendNone)) (setq acExtendNone 0))
 
 ;;; Helper: Convert a VARIANT or SAFEARRAY (of doubles) to a plain list
-(defun _var->list (v)
-  (cond
-    ((= (type v) 'VARIANT)   (vlax-safearray->list (vlax-variant-value v)))
+(defun _var->list (v) 
+  (cond 
+    ((= (type v) 'VARIANT) (vlax-safearray->list (vlax-variant-value v)))
     ((= (type v) 'SAFEARRAY) (vlax-safearray->list v))
     ((listp v) v)
-    (t nil)))
+    (t nil)
+  )
+)
 
 ;;; Helper: Ensure 3D point (z defaults to 0.0)
 (defun _3d (pt) 
@@ -45,14 +47,18 @@
 
 ;;; Helper: quick overlap heuristic for colinear / coincident objects where
 ;;; IntersectWith may return no points (e.g., fully overlapping segments)
-(defun _maybe-overlap? (o1 o2)
-  (and (vlax-method-applicable-p o1 'GetClosestPointTo)
+(defun _maybe-overlap? (o1 o2) 
+  (and (vlax-method-applicable-p o1 'GetClosestPointTo) 
        (vlax-method-applicable-p o2 'GetClosestPointTo)
-       (let* ((p1 (vlax-curve-getStartPoint o1))
-              (qraw (vlax-invoke o2 'GetClosestPointTo (vlax-3d-point p1)))
-              (p2  (_var->list qraw))
-              (d   (if (and p1 p2) (distance p1 p2) 1e9)))
-         (< d 1e-9))) ; tolerance
+       (let* 
+         ((p1 (vlax-curve-getStartPoint o1)) 
+           (qraw (vlax-invoke o2 'GetClosestPointTo (vlax-3d-point p1)))
+           (p2 (_var->list qraw))
+           (d (if (and p1 p2) (distance p1 p2) 1e9))
+         )
+         (< d 1e-9)
+       )
+  ) ; tolerance
 )
 
 ;;; Core routine: given a VLA polyline object, return list of (ename . handle)
