@@ -29,8 +29,8 @@
 (defun pvw-dot2d (a b) (+ (* (car a) (car b)) (* (cadr a) (cadr b))))
 (defun pvw-cross2d (a b) (- (* (car a) (cadr b)) (* (cadr a) (car b))))
 
-;; Improved point-on-segment test tolerant to slight skew & returns param t (or nil)
-(defun point-param-on-seg (p1 p2 pt / v w vlen2 t dist cross) 
+;; Improved point-on-segment test tolerant to slight skew & returns param (or nil)
+(defun point-param-on-seg (p1 p2 pt / v w vlen2 paramT dist cross) 
   (setq v     (mapcar '- p2 p1)
         w     (mapcar '- pt p1)
         vlen2 (+ (* (car v) (car v)) (* (cadr v) (cadr v)))
@@ -38,18 +38,18 @@
   (if (<= vlen2 0.0) 
     nil
     (progn 
-      (setq t (/ (pvw-dot2d w v) vlen2))
-      (if (and (>= t -0.0005) (<= t 1.0005)) 
+      (setq paramT (/ (pvw-dot2d w v) vlen2))
+      (if (and (>= paramT -0.0005) (<= paramT 1.0005)) 
         (progn 
           (setq cross (pvw-cross2d v w)
                 dist  (if (<= vlen2 0.0) 1e9 (/ (abs cross) (sqrt vlen2)))
           )
-          (if (< dist (* 25 *pv-eps*)) t)
+          (if (< dist (* 25 *pv-eps*)) paramT)
         )
       )
-    )
-  )
-)
+    ) ; end progn
+  ) ; end if length > 0
+)     ; end defun point-param-on-seg
 
 (defun in-model-space-p () (> (getvar "CVPORT") 1))
 
@@ -128,17 +128,17 @@
 ;; Horizontal test used for label logic
 (defun horizontal? (p1 p2) (nearly-zero (- (cadr p1) (cadr p2))))
 
-;; Return list of (t param point) sorted by param along segment; filtering by perpendicular distance
-(defun get-collinear-modules (p1 p2 modSSet / i eData insPt t acc) 
+;; Return list of (paramT param point) sorted by param along segment; filtering by perpendicular distance
+(defun get-collinear-modules (p1 p2 modSSet / i eData insPt paramT acc) 
   (setq i   0
         acc nil
   )
   (while (< i (sslength modSSet)) 
-    (setq eData (entget (ssname modSSet i))
-          insPt (cdr (assoc 10 eData))
-          t     (point-param-on-seg p1 p2 insPt)
+    (setq eData  (entget (ssname modSSet i))
+          insPt  (cdr (assoc 10 eData))
+          paramT (point-param-on-seg p1 p2 insPt)
     )
-    (if t (setq acc (cons (list t insPt) acc)))
+    (if paramT (setq acc (cons (list paramT insPt) acc)))
     (setq i (1+ i))
   )
   (setq acc (vl-sort acc '(lambda (a b) (< (car a) (car b)))))
@@ -171,8 +171,8 @@
        (while 
          (progn (setq p2e (safe-entsel "Repick LAST module:")) 
                 (if (not (is-mod-insert? p2e modSSet)) 
-                  (princ "\nPick valid module.")
-                  T
+                  (progn (princ "\nPick valid module.") T)
+                  nil
                 )
          )
        )
@@ -190,7 +190,7 @@
       )
       ((= ans "M")
        (cond 
-         ((> modulesFound need) ; trim
+         ((> modulesFound need)
           (setq firstPt  (car found)
                 lastPt   (car (last found))
                 interior (reverse (cdr (reverse (cdr found))))
@@ -337,57 +337,44 @@
 )
 
 ;; Load block from file path or create simple placeholder
-(defun pvw:ensure-block (blockName blockPath autoCreate / blockExists) 
-  (setq blockExists (tblsearch "BLOCK" blockName))
+(defun pvw:ensure-block (blockName blockPath autoCreate / exists) 
+  (setq exists (tblsearch "BLOCK" blockName))
   (cond 
-    ;; Block already exists
-    (blockExists
-     (pvw:dbg (strcat "Block " blockName " already exists"))
-     T
-    )
-
-    ;; Try to load from file path
+    (exists (pvw:dbg (strcat "Block present: " blockName)) T)
     ((and blockPath (findfile blockPath))
-     (pvw:dbg (strcat "Loading " blockName " from " blockPath))
-     (command "._-INSERT" blockPath '(0 0 0) "" "" "" "")
-     (command "._EXPLODE" (entlast))
-     (command "._-BLOCK" blockName '(0 0 0) (ssget "_L") "")
+     (pvw:dbg (strcat "Importing block: " blockName))
+     (princ (strcat "\nImporting block from file: " blockPath))
+     (command "._-INSERT" blockPath '(0 0 0) 1.0 1.0 0.0)
+     (command) ; finish insert if needed
+     (if (not (tblsearch "BLOCK" blockName)) 
+       (progn 
+         ;; Rename last inserted definition if names differ (user’s file may have internal name)
+         (pvw:dbg 
+           "Block name mismatch or undefined - placeholder creation fallback"
+         )
+         (pvw:create-simple-block blockName)
+       )
+     )
      T
     )
-
-    ;; Auto-create simple placeholder
     (autoCreate
-     (pvw:dbg (strcat "Creating placeholder block " blockName))
+     (pvw:dbg (strcat "Creating placeholder block: " blockName))
      (pvw:create-simple-block blockName)
      T
     )
-
-    ;; Skip if missing
-    (T
-     (pvw:dbg (strcat "Block " blockName " not found - skipping"))
-     nil
-    )
+    (T (pvw:dbg (strcat "Block missing and cannot create: " blockName)) nil)
   )
 )
 
-;; Create a simple text-based placeholder block
+;; Create a simple text-based placeholder block (direct definition)
 (defun pvw:create-simple-block (blockName / txtSize) 
   (setq txtSize 6.0)
-  (entmake 
-    (list '(0 . "BLOCK") '(2 . "temp_block") '(70 . 0) '(10 0.0 0.0 0.0))
-  )
-  (entmake 
-    (list '(0 . "TEXT") 
-          '(1 . blockName)
-          '(8 . "0")
-          '(10 0.0 0.0 0.0)
-          (cons 40 txtSize)
-          '(50 . 0.0)
-          '(7 . "STANDARD")
-    )
-  )
-  (entmake '(0 . "ENDBLK"))
-  (command "._-BLOCK" blockName '(0 0 0) (entlast) "")
+  (pvw:dbg (strcat "Creating simple block via commands: " blockName))
+  ;; Use command-based definition for reliability
+  (command "._-BLOCK" blockName '(0 0 0))
+  (command "._TEXT" '(0 0 0) txtSize 0 blockName)
+  (command "") ; end block
+  blockName
 )
 
 ;; Error wrapper function (moved to top level to avoid nested defun issues)
@@ -634,8 +621,11 @@
       (while 
         (progn (setq p1e (safe-entsel "Pick FIRST module of the string:")) 
                (if (not (is-mod-insert? p1e modSSet)) 
-                 (princ "\nPlease pick a valid module of the selected type.")
-                 T
+                 (progn 
+                   (princ "\nPlease pick a valid module of the selected type.")
+                   T ; Keep looping if invalid
+                 )
+                 nil ; Exit loop if valid
                )
         )
       )
@@ -648,8 +638,11 @@
       (while 
         (progn (setq p2e (safe-entsel "Pick LAST module of the string:")) 
                (if (not (is-mod-insert? p2e modSSet)) 
-                 (princ "\nPlease pick a valid module of the selected type.")
-                 T
+                 (progn 
+                   (princ "\nPlease pick a valid module of the selected type.")
+                   T ; Keep looping if invalid
+                 )
+                 nil ; Exit loop if valid
                )
         )
       )
