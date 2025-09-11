@@ -1,22 +1,23 @@
 ;;; ==========================================================
-;;; Center Circle Tool - Solar String Planning
+;;; PV String Tool - Solar String Planning
 ;;; Description: Select objects to create string paths with terminal blocks and polylines
+;;; Command Name: PVSTRING
 ;;; Author: GitHub Copilot
 ;;; Date: September 11, 2025
 ;;; ==========================================================
 
 ;; Main command function
-(defun c:CENTERCIRCLE (/ obj center oldlayer oldecho doc *undoStarted* oldErr 
-                       blockEnt blockRadius quadPt opt centerPrev objNext centerNext 
-                       termBlockEnt termBlockRadius termQuadPt lastLineEnt 
-                       lastLineData lastLineStart newLineData ss continueLoop 
-                       lineEntities oldPeditAccept oldFilletRad
-                      ) 
+(defun c:PVSTRING (/ obj center oldlayer oldecho doc *undoStarted* oldErr blockEnt 
+                   blockRadius quadPt opt centerPrev objNext centerNext termBlockEnt 
+                   termBlockRadius termQuadPt lastLineEnt lastLineData lastLineStart 
+                   newLineData ss continueLoop lineEntities oldPeditAccept 
+                   oldFilletRad
+                  ) 
   ;; Save system variables and set up error handling
   (setq oldlayer       (getvar "CLAYER")
         oldecho        (getvar "CMDECHO")
         oldPeditAccept (getvar "PEDITACCEPT")
-    oldFilletRad   (getvar "FILLETRAD")
+        oldFilletRad   (getvar "FILLETRAD")
         doc            (vla-get-ActiveDocument (vlax-get-Acad-Object))
         *undoStarted*  nil
         oldErr         *error*
@@ -88,36 +89,25 @@
                 (setq blockRadius (calculate-block-radius blockEnt center))
                 (setq opt "")
                 (setq lineEntities (list)) ; Track line entities for joining
-                (while (not (wcmatch (strcase opt) "T")) 
-                  (princ "\nSelect next object (Enter to continue, T to terminate): ")
+                (while (not (wcmatch opt "T")) 
+                  (princ "\nSelect next object or press Enter for options (T=terminate): ")
                   (setq objNext (car (entsel)))
-                  (if (null objNext) 
-                    (progn 
-                      (princ "\nNo object selected. Enter T to finish or select another object.")
-                      (setq opt (getstring "\nType T to terminate or press Enter to continue: "))
-                    )
+                  (if objNext 
                     (progn 
                       (setq centerNext (calculate-object-center objNext))
-                      (if (null centerNext) 
-                        (princ "\nCannot determine center of that object; skipping.")
+                      (if centerNext 
                         (progn 
-                          ;; Calculate line start point (from block edge or previous center)
                           (if (= centerPrev center) 
-                            ;; First line from block - use quadrant point
                             (setq lineStart (calculate-quadrant-point 
                                               centerPrev
                                               centerNext
                                               blockRadius
                                             )
                             )
-                            ;; Subsequent lines from previous center
                             (setq lineStart centerPrev)
                           )
-
-                          ;; Create line from start point to next center
                           (command "LINE" lineStart centerNext "")
                           (setq lineEntities (append lineEntities (list (entlast))))
-
                           (princ 
                             (strcat "\nLine created to: " 
                                     (rtos (car centerNext) 2 4)
@@ -126,12 +116,21 @@
                             )
                           )
                           (setq centerPrev centerNext)
+                          ;; reset opt so loop condition only depends on explicit T entry
+                          (setq opt "")
                         )
+                        (princ "\nCannot determine center of that object; skipping.")
                       )
                     )
-                  )
-                  (if (not (null objNext)) 
-                    (setq opt (getstring "\nPress Enter to add another, or type T to terminate: "))
+                    (progn 
+                      (setq opt (strcase 
+                                  (vl-string-trim " \t" 
+                                                  (getstring "\nEnter T to terminate or Enter to continue: ")
+                                  )
+                                )
+                      )
+                      (if (= opt "") (setq opt "")) ; ensure empty stays empty
+                    )
                   )
                 )
                 ;; Handle termination before joining lines
@@ -211,15 +210,15 @@
                         )
                       )
                     )
-                        ;; Apply fillet of radius 6 to entire polyline (P option)
-                        (if polylineEnt
-                          (progn
-                            (setvar "FILLETRAD" 6.0)
-                            ;; FILLET command sequence: FILLET, P (Polyline), select polyline entity
-                            (command "_.FILLET" "_P" polylineEnt)
-                            (princ "\nApplied 6 unit fillets to polyline corners.")
-                          )
-                        )
+                    ;; Apply fillet of radius 6 to entire polyline (P option)
+                    (if polylineEnt 
+                      (progn 
+                        (setvar "FILLETRAD" 6.0)
+                        ;; FILLET command sequence: FILLET, P (Polyline), select polyline entity
+                        (command "_.FILLET" "_P" polylineEnt)
+                        (princ "\nApplied 6 unit fillets to polyline corners.")
+                      )
+                    )
                   )
                   (princ "\nNo line segments created.")
                 )
@@ -244,8 +243,8 @@
       (if *undoStarted* (vla-EndUndoMark doc))
       (if oldlayer (setvar "CLAYER" oldlayer))
       (if oldecho (setvar "CMDECHO" oldecho))
-        (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
-        (if oldFilletRad (setvar "FILLETRAD" oldFilletRad))
+      (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
+      (if oldFilletRad (setvar "FILLETRAD" oldFilletRad))
       (setq *error* oldErr)
     )
   )
