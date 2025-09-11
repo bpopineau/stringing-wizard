@@ -7,15 +7,16 @@
 
 ;; Main command function
 (defun c:CENTERCIRCLE (/ obj center oldlayer oldecho doc *undoStarted* oldErr 
-                       blockEnt blockRadius quadPt obj2 center2 opt centerPrev objNext 
-                       centerNext termBlockEnt termBlockRadius termQuadPt lastLineEnt 
-                       lineData lineEnd lineStart newLineData ss testLine i 
-                       continueLoop lineEntities firstQuadPt oldPeditAccept
+                       blockEnt blockRadius quadPt opt centerPrev objNext centerNext 
+                       termBlockEnt termBlockRadius termQuadPt lastLineEnt 
+                       lastLineData lastLineStart newLineData ss continueLoop 
+                       lineEntities oldPeditAccept oldFilletRad
                       ) 
   ;; Save system variables and set up error handling
   (setq oldlayer       (getvar "CLAYER")
         oldecho        (getvar "CMDECHO")
         oldPeditAccept (getvar "PEDITACCEPT")
+    oldFilletRad   (getvar "FILLETRAD")
         doc            (vla-get-ActiveDocument (vlax-get-Acad-Object))
         *undoStarted*  nil
         oldErr         *error*
@@ -30,6 +31,7 @@
                   (if oldlayer (setvar "CLAYER" oldlayer))
                   (if oldecho (setvar "CMDECHO" oldecho))
                   (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
+                  (if oldFilletRad (setvar "FILLETRAD" oldFilletRad))
                   (setq *error* oldErr)
                   (princ)
                 )
@@ -113,7 +115,7 @@
                           )
 
                           ;; Create line from start point to next center
-                          (command "PLINE" lineStart centerNext "")
+                          (command "LINE" lineStart centerNext "")
                           (setq lineEntities (append lineEntities (list (entlast))))
 
                           (princ 
@@ -132,7 +134,56 @@
                     (setq opt (getstring "\nPress Enter to add another, or type T to terminate: "))
                   )
                 )
-                ;; After while loop ends, handle line joining first, then termination
+                ;; Handle termination before joining lines
+                (if 
+                  (and (wcmatch (strcase opt) "T") 
+                       centerPrev
+                       (not (equal centerPrev center))
+                  )
+                  (progn 
+                    ;; Insert StringTermMinus block at last center point
+                    (command "INSERT" 
+                             "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
+                             centerPrev 1.0 1.0 0
+                    )
+                    (setq termBlockEnt (entlast))
+                    (setq termBlockRadius (calculate-block-radius 
+                                            termBlockEnt
+                                            centerPrev
+                                          )
+                    )
+
+                    ;; Calculate quadrant point on termination block (same as plus block method)
+                    (if (> (length lineEntities) 0) 
+                      (progn 
+                        ;; Get the last line's start point to determine direction
+                        (setq lastLineEnt (car (reverse lineEntities)))
+                        (setq lastLineData (entget lastLineEnt))
+                        (setq lastLineStart (cdr (assoc 10 lastLineData)))
+
+                        ;; Calculate quadrant point on minus block
+                        (setq termQuadPt (calculate-quadrant-point 
+                                           centerPrev
+                                           lastLineStart
+                                           termBlockRadius
+                                         )
+                        )
+
+                        ;; Modify last line so its end point hits the quadrant point on the minus block
+                        (setq newLineData (subst (cons 11 termQuadPt) 
+                                                 (assoc 11 lastLineData)
+                                                 lastLineData
+                                          )
+                        )
+                        (entmod newLineData)
+                        (entupd lastLineEnt)
+                        (princ "\nStringTermMinus block inserted and last segment adjusted to quadrant point.")
+                      )
+                    )
+                  )
+                )
+
+                ;; Join all line entities into a polyline
                 (if (>= (length lineEntities) 1) 
                   (progn 
                     ;; Join the line entities into a polyline using PolyTools technique
@@ -146,6 +197,7 @@
 
                         ;; Use PEDIT with multiple selection to join - PolyTools method
                         (command "_.pedit" "_m" ss "" "_j" "" "")
+                        (setq polylineEnt (entlast)) ; Store reference to the new polyline
                         (princ "\nLines joined into polyline using PEDIT multiple.")
                       )
                       (progn 
@@ -153,85 +205,21 @@
                         (if (= (length lineEntities) 1) 
                           (progn 
                             (command "_.pedit" (car lineEntities) "" "")
+                            (setq polylineEnt (entlast)) ; Store reference to the new polyline
                             (princ "\nSingle line converted to polyline.")
                           )
                         )
                       )
                     )
-
-                    ;; Now handle termination block insertion and polyline adjustment
-                    (if 
-                      (and (wcmatch (strcase opt) "T") 
-                           centerPrev
-                           (not (equal centerPrev center))
-                      )
-                      (progn 
-                        ;; Insert StringTermMinus block at last center point
-                        (command "INSERT" 
-                                 "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
-                                 centerPrev 1.0 1.0 0
-                        )
-                        (setq termBlockEnt (entlast))
-                        (setq termBlockRadius (calculate-block-radius 
-                                                termBlockEnt
-                                                centerPrev
-                                              )
-                        )
-
-                        ;; Get the polyline that was just created (should be before the block)
-                        (setq polylineEnt (entprev termBlockEnt))
-
-                        ;; Verify it's a polyline, if not search backwards
-                        (while 
-                          (and polylineEnt 
-                               (not 
-                                 (equal (cdr (assoc 0 (entget polylineEnt))) 
-                                        "LWPOLYLINE"
-                                 )
-                               )
+                        ;; Apply fillet of radius 6 to entire polyline (P option)
+                        (if polylineEnt
+                          (progn
+                            (setvar "FILLETRAD" 6.0)
+                            ;; FILLET command sequence: FILLET, P (Polyline), select polyline entity
+                            (command "_.FILLET" "_P" polylineEnt)
+                            (princ "\nApplied 6 unit fillets to polyline corners.")
                           )
-                          (setq polylineEnt (entprev polylineEnt))
                         )
-
-                        (if polylineEnt 
-                          (progn 
-                            ;; Calculate the quadrant point on the termination block
-                            ;; Direction should be from the second-to-last point toward the block center
-                            (setq polyData (entget polylineEnt))
-                            (setq vertices (list))
-
-                            ;; Collect all vertex points
-                            (foreach item polyData 
-                              (if (= (car item) 10) 
-                                (setq vertices (append vertices (list (cdr item))))
-                              )
-                            )
-
-                            ;; Get the second-to-last point for direction calculation
-                            (if (> (length vertices) 1) 
-                              (setq secondLastPt (nth (- (length vertices) 2) 
-                                                      vertices
-                                                 )
-                              )
-                              (setq secondLastPt (nth 0 vertices)) ; Fallback to first point
-                            )
-
-                            ;; Calculate quadrant point
-                            (setq termQuadPt (calculate-quadrant-point 
-                                               centerPrev
-                                               secondLastPt
-                                               termBlockRadius
-                                             )
-                            )
-
-                            ;; Update the polyline's last vertex using PEDIT
-                            (command "_.pedit" polylineEnt "_e" termQuadPt "")
-                            (princ "\nPolyline endpoint adjusted to StringTermMinus block quadrant.")
-                          )
-                          (princ "\nWarning: Could not find polyline to adjust endpoint.")
-                        )
-                      )
-                    )
                   )
                   (princ "\nNo line segments created.")
                 )
@@ -256,7 +244,8 @@
       (if *undoStarted* (vla-EndUndoMark doc))
       (if oldlayer (setvar "CLAYER" oldlayer))
       (if oldecho (setvar "CMDECHO" oldecho))
-      (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
+        (if oldPeditAccept (setvar "PEDITACCEPT" oldPeditAccept))
+        (if oldFilletRad (setvar "FILLETRAD" oldFilletRad))
       (setq *error* oldErr)
     )
   )
