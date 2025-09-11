@@ -5,7 +5,7 @@
 ;;;   Automates PV stringing workflow:
 ;;;     - Prompts user for inverter & string info
 ;;;     - Guides module selection (first/last, auto-fill interior)
-;;;     - Inserts +/- blocks (configurable; placeholders)
+;;;     - Inserts +/- blocks (STRICT: must exist at configured DWG paths – no fallback)
 ;;;     - Draws routed polyline with fillets
 ;;;     - Labels string automatically (BC justification)
 ;;; Notes:
@@ -148,12 +148,16 @@
 
 ;; Adjust module list to match required count with interactive options
 (defun pvw:adjust-modules (found required p1 p2 modSSet / modulesFound need ans p2e 
-                           interior firstPt lastPt
+                           interior firstPt lastPt oldDyn canceled
                           ) 
+  ;; Suppress dynamic input so the full prompt text is visible (restore later)
+  (setq oldDyn (getvar "DYNMODE"))
+  (setvar "DYNMODE" 0)
   (setq modulesFound (length found)
         need         required
+        canceled     nil
   )
-  (while (/= modulesFound need) 
+  (while (and (not canceled) (/= modulesFound need)) 
     (princ 
       (strcat "\nFound " 
               (itoa modulesFound)
@@ -162,10 +166,11 @@
               "."
       )
     )
+    (princ "\nOptions: A=Accept current count, R=Repick last module, M=Manual adjust, C=Cancel")
     (initget "A R M C")
     (setq ans (getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
     (cond 
-      ((or (null ans) (= ans "C")) (princ "\nCanceled.") (exit))
+      ((or (null ans) (= ans "C")) (princ "\nCanceled by user.") (setq canceled T))
       ((= ans "A") (setq need modulesFound))
       ((= ans "R")
        (while 
@@ -176,17 +181,21 @@
                 )
          )
        )
-       (if (null p2e) (progn (princ "\nCanceled.") (exit)))
-       (setq p2    (inspt-of p2e)
-             found (get-collinear-modules p1 p2 modSSet)
+       (if (null p2e) 
+         (progn (princ "\nCanceled repick.") (setq canceled T))
+         (progn 
+           (setq p2    (inspt-of p2e)
+                 found (get-collinear-modules p1 p2 modSSet)
+           )
+           (if (not (equal (car found) p1 *pv-eps*)) 
+             (setq found (cons p1 (vl-remove p1 found)))
+           )
+           (if (not (equal (car (last found)) p2 *pv-eps*)) 
+             (setq found (append (vl-remove p2 found) (list p2)))
+           )
+           (setq modulesFound (length found))
+         )
        )
-       (if (not (equal (car found) p1 *pv-eps*)) 
-         (setq found (cons p1 (vl-remove p1 found)))
-       )
-       (if (not (equal (car (last found)) p2 *pv-eps*)) 
-         (setq found (append (vl-remove p2 found) (list p2)))
-       )
-       (setq modulesFound (length found))
       )
       ((= ans "M")
        (cond 
@@ -234,7 +243,8 @@
       )
     )
   )
-  found
+  (setvar "DYNMODE" oldDyn)
+  (if canceled nil found)
 )
 
 ;; ------------------------
@@ -326,8 +336,7 @@
                            :plus-block "PV_PLUS" :minus-block-path 
                            "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
                            :plus-block-path 
-                           "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermPlus.dwg" 
-                           :auto-create-blocks T
+                           "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermPlus.dwg"
                      )
   )
 )
@@ -336,45 +345,42 @@
   (cadr (member key *pvw-config*))
 )
 
-;; Load block from file path or create simple placeholder
-(defun pvw:ensure-block (blockName blockPath autoCreate / exists) 
+;; Load block strictly from external DWG path. No placeholder creation.
+(defun pvw:ensure-block (blockName blockPath / exists tmpEnt) 
   (setq exists (tblsearch "BLOCK" blockName))
   (cond 
-    (exists (pvw:dbg (strcat "Block present: " blockName)) T)
+    (exists (pvw:dbg (strcat "Block already present: " blockName)) T)
     ((and blockPath (findfile blockPath))
-     (pvw:dbg (strcat "Importing block: " blockName))
-     (princ (strcat "\nImporting block from file: " blockPath))
+     (pvw:dbg (strcat "Loading block from path: " blockPath))
+     (princ (strcat "\nLoading block '" blockName "' from: " blockPath))
      (command "._-INSERT" blockPath '(0 0 0) 1.0 1.0 0.0)
-     (command) ; finish insert if needed
+     (setq tmpEnt (entlast))
+     (command) ; finalize if still in insert
      (if (not (tblsearch "BLOCK" blockName)) 
        (progn 
-         ;; Rename last inserted definition if names differ (user’s file may have internal name)
-         (pvw:dbg 
-           "Block name mismatch or undefined - placeholder creation fallback"
+         (princ 
+           (strcat "\nERROR: Expected block name '" 
+                   blockName
+                   "' not found in file."
+           )
          )
-         (pvw:create-simple-block blockName)
+         (if tmpEnt (entdel tmpEnt))
+         nil
+       )
+       (progn (if tmpEnt (entdel tmpEnt)) T)
+     )
+    )
+    (T
+     (princ 
+       (strcat "\nERROR: Block file not found for '" 
+               blockName
+               "' at: "
+               (if blockPath blockPath "<nil>")
        )
      )
-     T
+     nil
     )
-    (autoCreate
-     (pvw:dbg (strcat "Creating placeholder block: " blockName))
-     (pvw:create-simple-block blockName)
-     T
-    )
-    (T (pvw:dbg (strcat "Block missing and cannot create: " blockName)) nil)
   )
-)
-
-;; Create a simple text-based placeholder block (direct definition)
-(defun pvw:create-simple-block (blockName / txtSize) 
-  (setq txtSize 6.0)
-  (pvw:dbg (strcat "Creating simple block via commands: " blockName))
-  ;; Use command-based definition for reliability
-  (command "._-BLOCK" blockName '(0 0 0))
-  (command "._TEXT" '(0 0 0) txtSize 0 blockName)
-  (command "") ; end block
-  blockName
 )
 
 ;; Error wrapper function (moved to top level to avoid nested defun issues)
@@ -387,7 +393,8 @@
 )
 
 ;; Abort helper (top-level) - pass explicit environment for safe cleanup
-(defun pvw:abort (msg doc oldlayer oldrad oldecho oldErr undoFlag) 
+(defun pvw:abort (msg doc oldlayer oldrad oldecho oldErr undoFlag)
+  ;; Graceful abort: perform cleanup but DO NOT call (exit). Return nil so caller can decide flow.
   (if msg (princ (strcat "\n" msg)))
   (if undoFlag (vla-EndUndoMark doc))
   (if oldlayer (setvar "CLAYER" oldlayer))
@@ -395,8 +402,7 @@
   (if oldecho (setvar "CMDECHO" oldecho))
   (if oldErr (setq *error* oldErr))
   (princ)
-  (exit)
-)
+  nil)
 
 ;; Config setter utility (update or append key in *pvw-config*)
 (defun pvw:set-cfg (key val / src dst k v) 
@@ -660,19 +666,44 @@
         (setq foundPts (append (vl-remove p2 foundPts) (list p2)))
       )
       (setq foundPts (pvw:adjust-modules foundPts modulesNeeded p1 p2 modSSet))
+      (if (null foundPts) 
+        (pvw:abort "Canceled during module adjustment." doc oldlayer oldrad oldecho 
+                   oldErr *undoStarted*
+        )
+      )
       (setq ptList foundPts)
 
       ;; Ensure blocks
-      (setq minusAvail (pvw:ensure-block 
-                         minusName
-                         (pvw:cfg :minus-block-path)
-                         (pvw:cfg :auto-create-blocks)
-                       )
-            plusAvail  (pvw:ensure-block 
-                         plusName
-                         (pvw:cfg :plus-block-path)
-                         (pvw:cfg :auto-create-blocks)
-                       )
+      (setq minusAvail (pvw:ensure-block minusName (pvw:cfg :minus-block-path))
+            plusAvail  (pvw:ensure-block plusName (pvw:cfg :plus-block-path))
+      )
+      (cond 
+        ((not minusAvail)
+         (pvw:abort 
+           (strcat "Missing required MINUS block or file: " 
+                   (pvw:cfg :minus-block-path)
+           )
+           doc
+           oldlayer
+           oldrad
+           oldecho
+           oldErr
+           *undoStarted*
+         )
+        )
+        ((not plusAvail)
+         (pvw:abort 
+           (strcat "Missing required PLUS block or file: " 
+                   (pvw:cfg :plus-block-path)
+           )
+           doc
+           oldlayer
+           oldrad
+           oldecho
+           oldErr
+           *undoStarted*
+         )
+        )
       )
       (if minusAvail (setq minusPt (car ptList)) (setq minusPt nil))
       (if (and minusAvail minusPt) 
@@ -696,7 +727,7 @@
 )
 
 (princ "\nType PVSTRINGS to run the PV Stringing Wizard.")
-(princ "\nType PVWCONFIG to configure block paths and settings.")
+(princ "\nType PVWCONFIG to configure block paths.")
 (princ)
 
 ;; Configuration command (fixed cond structure)
@@ -714,11 +745,8 @@
             (if (pvw:cfg :plus-block-path) (pvw:cfg :plus-block-path) "None")
     )
   )
-  (princ 
-    (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No"))
-  )
-  (initget "M P A Q")
-  (setq choice (getkword "\nConfigure [M]inus path / [P]lus path / [A]uto-create toggle / [Q]uit: "))
+  (initget "M P Q")
+  (setq choice (getkword "\nConfigure [M]inus path / [P]lus path / [Q]uit: "))
   (cond 
     ((= choice "M")
      (setq filePath (getfiled "Select Minus Block File" "" "dwg" 0))
@@ -733,14 +761,6 @@
      (if filePath 
        (progn (pvw:set-cfg :plus-block-path filePath) 
               (princ (strcat "\nPlus block path set to: " filePath))
-       )
-     )
-    )
-    ((= choice "A")
-     (pvw:set-cfg :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
-     (princ 
-       (strcat "\nAuto-create blocks: " 
-               (if (pvw:cfg :auto-create-blocks) "Enabled" "Disabled")
        )
      )
     )
