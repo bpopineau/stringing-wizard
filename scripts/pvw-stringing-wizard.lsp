@@ -102,6 +102,27 @@
   (and en (= "INSERT" (cdr (assoc 0 (entget en)))) (ssmemb en modSSet))
 )
 
+;; Helper: pick a valid module of current type; returns ENAME or NIL (cancel)
+(defun pvw:pick-module (promptText modSSet / ent) 
+  (while 
+    (progn 
+      (setq ent (safe-entsel promptText))
+      (cond 
+        ((null ent) (setq ent nil) nil) ; user canceled -> break returning nil
+        ((not (is-mod-insert? ent modSSet))
+         (princ "\nPlease pick a valid module of the selected type.")
+         T
+        ) ; continue loop
+        (T nil) ; valid -> exit loop
+      )
+    )
+  )
+  ent
+)
+
+;; Debug printer (toggle with (setq *pvw-debug* T))
+(defun pvw:dbg (msg) (if *pvw-debug* (princ (strcat "\n[PVW] " msg))))
+
 ;; ------------------------
 ;; Geometry helpers
 ;; ------------------------
@@ -393,8 +414,21 @@
           ;; IMPLEMENTED TODO SECTION (interactive routing)
           ;; ------------------------
           (let 
-            (p1e p2e p1 p2 foundPts ptList ans modulesFound need delta minusName 
-                 plusName minusPt plusPt
+            ((firstModEnt nil) 
+              (lastModEnt nil)
+              (p1 nil)
+              (p2 nil)
+              (foundPts nil)
+              (ptList nil)
+              (ans nil)
+              (modulesFound nil)
+              (need nil)
+              (delta nil)
+              (minusName nil)
+              (plusName nil)
+              (minusPt nil)
+              (plusPt nil)
+              (keepAdding nil)
             )
 
             ;; Resolve configurable +/- block names (with defaults if not bound)
@@ -410,34 +444,22 @@
             )
 
             ;; Pick FIRST module
-            (while 
-              (progn 
-                (setq p1e (safe-entsel "Pick FIRST module of the string:"))
-                (if (not (is-mod-insert? p1e modSSet)) 
-                  (progn (princ "\nPlease pick a valid module of the selected type.") 
-                         T
-                  )
-                  nil
-                )
-              )
+            (setq firstModEnt (pvw:pick-module 
+                                "Pick FIRST module of the string:"
+                                modSSet
+                              )
             )
-            (if (null p1e) (progn (princ "\nCanceled.") (exit)))
-            (setq p1 (inspt-of p1e))
+            (if (null firstModEnt) (progn (princ "\nCanceled.") (exit)))
+            (setq p1 (inspt-of firstModEnt))
 
             ;; Pick LAST module
-            (while 
-              (progn 
-                (setq p2e (safe-entsel "Pick LAST module of the string:"))
-                (if (not (is-mod-insert? p2e modSSet)) 
-                  (progn (princ "\nPlease pick a valid module of the selected type.") 
-                         T
-                  )
-                  nil
-                )
-              )
+            (setq lastModEnt (pvw:pick-module 
+                               "Pick LAST module of the string:"
+                               modSSet
+                             )
             )
-            (if (null p2e) (progn (princ "\nCanceled.") (exit)))
-            (setq p2 (inspt-of p2e))
+            (if (null lastModEnt) (progn (princ "\nCanceled.") (exit)))
+            (setq p2 (inspt-of lastModEnt))
 
             ;; Build ordered run along the line (including endpoints)
             (setq foundPts (get-collinear-modules p1 p2 modSSet))
@@ -481,19 +503,9 @@
 
                 ;; Repick LAST endpoint and rebuild
                 ((= ans "R")
-                 (while 
-                   (progn 
-                     (setq p2e (safe-entsel "Repick LAST module:"))
-                     (if (not (is-mod-insert? p2e modSSet)) 
-                       (progn (princ "\nPlease pick a valid module of the selected type.") 
-                              T
-                       )
-                       nil
-                     )
-                   )
-                 )
-                 (if (null p2e) (progn (princ "\nCanceled.") (exit)))
-                 (setq p2 (inspt-of p2e))
+                 (setq lastModEnt (pvw:pick-module "Repick LAST module:" modSSet))
+                 (if (null lastModEnt) (progn (princ "\nCanceled.") (exit)))
+                 (setq p2 (inspt-of lastModEnt))
                  (setq foundPts (get-collinear-modules p1 p2 modSSet))
                  (if (not (equal (car foundPts) p1 *pv-eps*)) 
                    (setq foundPts (cons p1 (vl-remove p1 foundPts)))
@@ -539,8 +551,11 @@
                     )
                     (setq keepAdding T)
                     (while (and keepAdding (< modulesFound need)) 
-                      (setq p2e (safe-entsel "Pick an extra module to include:"))
-                      (if (not (is-mod-insert? p2e modSSet)) 
+                      (setq lastModEnt (safe-entsel 
+                                         "Pick an extra module to include:"
+                                       )
+                      )
+                      (if (not (is-mod-insert? lastModEnt modSSet)) 
                         (progn (princ "\nInvalid pick or canceled; stopping manual add.") 
                                (setq keepAdding nil)
                         ) ; stop adding, return to mismatch prompt
@@ -548,7 +563,7 @@
                           (setq foundPts (sort-points-along-line 
                                            p1
                                            p2
-                                           (cons (inspt-of p2e) foundPts)
+                                           (cons (inspt-of lastModEnt) foundPts)
                                          )
                           )
                           (setq modulesFound (length foundPts))
