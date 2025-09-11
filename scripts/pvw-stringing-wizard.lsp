@@ -30,17 +30,17 @@
 (defun pvw-cross2d (a b) (- (* (car a) (cadr b)) (* (cadr a) (car b))))
 
 ;; Improved point-on-segment test tolerant to slight skew & returns param t (or nil)
-(defun point-param-on-seg (p1 p2 pt / v w vlen2 t dist cross)
-  (setq v (mapcar '- p2 p1)
-        w (mapcar '- pt p1)
+(defun point-param-on-seg (p1 p2 pt / v w vlen2 t dist cross) 
+  (setq v     (mapcar '- p2 p1)
+        w     (mapcar '- pt p1)
         vlen2 (+ (* (car v) (car v)) (* (cadr v) (cadr v)))
   )
-  (if (<= vlen2 0.0)
+  (if (<= vlen2 0.0) 
     nil
-    (progn
-  (setq t (/ (pvw-dot2d w v) vlen2))
-      (if (and (>= t -0.0005) (<= t 1.0005))
-        (progn
+    (progn 
+      (setq t (/ (pvw-dot2d w v) vlen2))
+      (if (and (>= t -0.0005) (<= t 1.0005)) 
+        (progn 
           (setq cross (pvw-cross2d v w)
                 dist  (if (<= vlen2 0.0) 1e9 (/ (abs cross) (sqrt vlen2)))
           )
@@ -68,7 +68,7 @@
 
 ;; Debug flag & logger
 (if (not (boundp '*pvw-debug*)) (setq *pvw-debug* nil))
-(defun pvw:dbg (s /)
+(defun pvw:dbg (s /) 
   (if *pvw-debug* (princ (strcat "\n[PVW] " s)))
 )
 
@@ -129,9 +129,11 @@
 (defun horizontal? (p1 p2) (nearly-zero (- (cadr p1) (cadr p2))))
 
 ;; Return list of (t param point) sorted by param along segment; filtering by perpendicular distance
-(defun get-collinear-modules (p1 p2 modSSet / i eData insPt t acc)
-  (setq i 0 acc nil)
-  (while (< i (sslength modSSet))
+(defun get-collinear-modules (p1 p2 modSSet / i eData insPt t acc) 
+  (setq i   0
+        acc nil
+  )
+  (while (< i (sslength modSSet)) 
     (setq eData (entget (ssname modSSet i))
           insPt (cdr (assoc 10 eData))
           t     (point-param-on-seg p1 p2 insPt)
@@ -145,47 +147,84 @@
 )
 
 ;; Adjust module list to match required count with interactive options
-(defun pvw:adjust-modules (found required p1 p2 modSSet / modulesFound need ans p2e interior firstPt lastPt)
+(defun pvw:adjust-modules (found required p1 p2 modSSet / modulesFound need ans p2e 
+                           interior firstPt lastPt
+                          ) 
   (setq modulesFound (length found)
-        need         required)
-  (while (/= modulesFound need)
-    (princ (strcat "\nFound " (itoa modulesFound) " module(s); expected " (itoa need) "."))
+        need         required
+  )
+  (while (/= modulesFound need) 
+    (princ 
+      (strcat "\nFound " 
+              (itoa modulesFound)
+              " module(s); expected "
+              (itoa need)
+              "."
+      )
+    )
     (initget "A R M C")
     (setq ans (getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
-    (cond
+    (cond 
       ((or (null ans) (= ans "C")) (princ "\nCanceled.") (exit))
       ((= ans "A") (setq need modulesFound))
       ((= ans "R")
-       (while (progn (setq p2e (safe-entsel "Repick LAST module:"))
-                     (if (not (is-mod-insert? p2e modSSet)) (princ "\nPick valid module.") T)))
+       (while 
+         (progn (setq p2e (safe-entsel "Repick LAST module:")) 
+                (if (not (is-mod-insert? p2e modSSet)) 
+                  (princ "\nPick valid module.")
+                  T
+                )
+         )
+       )
        (if (null p2e) (progn (princ "\nCanceled.") (exit)))
        (setq p2    (inspt-of p2e)
-             found (get-collinear-modules p1 p2 modSSet))
-       (if (not (equal (car found) p1 *pv-eps*)) (setq found (cons p1 (vl-remove p1 found))))
-       (if (not (equal (car (last found)) p2 *pv-eps*)) (setq found (append (vl-remove p2 found) (list p2))))
+             found (get-collinear-modules p1 p2 modSSet)
+       )
+       (if (not (equal (car found) p1 *pv-eps*)) 
+         (setq found (cons p1 (vl-remove p1 found)))
+       )
+       (if (not (equal (car (last found)) p2 *pv-eps*)) 
+         (setq found (append (vl-remove p2 found) (list p2)))
+       )
        (setq modulesFound (length found))
       )
       ((= ans "M")
-       (cond
+       (cond 
          ((> modulesFound need) ; trim
-          (setq firstPt (car found) lastPt (car (last found)) interior (reverse (cdr (reverse (cdr found)))))
-          (while (> (+ 2 (length interior)) need)
-            (setq interior (reverse (cdr (reverse interior)))))
+          (setq firstPt  (car found)
+                lastPt   (car (last found))
+                interior (reverse (cdr (reverse (cdr found))))
+          )
+          (while (> (+ 2 (length interior)) need) 
+            (setq interior (reverse (cdr (reverse interior))))
+          )
           (setq found        (cons firstPt (append interior (list lastPt)))
-                modulesFound (length found))
+                modulesFound (length found)
+          )
           (princ (strcat "\nTrimmed to " (itoa modulesFound) " module(s)."))
          )
          ((< modulesFound need)
-          (princ (strcat "\nNeed to add " (itoa (- need modulesFound)) " module(s). Pick extras (Esc to stop)."))
-          (while (< modulesFound need)
+          (princ 
+            (strcat "\nNeed to add " 
+                    (itoa (- need modulesFound))
+                    " module(s). Pick extras (Esc to stop)."
+            )
+          )
+          (while (< modulesFound need) 
             (setq p2e (safe-entsel "Pick extra module:"))
-            (if (not (is-mod-insert? p2e modSSet))
-              (progn (princ "\nInvalid/canceled stopping add.") (setq modulesFound need))
-              (progn
-                (setq found (vl-sort (cons (inspt-of p2e) found)
-                                     '(lambda (a b)
-                                        (< (or (point-param-on-seg p1 p2 a) 0.0)
-                                           (or (point-param-on-seg p1 p2 b) 0.0)))))
+            (if (not (is-mod-insert? p2e modSSet)) 
+              (progn (princ "\nInvalid/canceled stopping add.") 
+                     (setq modulesFound need)
+              )
+              (progn 
+                (setq found (vl-sort (cons (inspt-of p2e) found) 
+                                     '(lambda (a b) 
+                                        (< (or (point-param-on-seg p1 p2 a) 0.0) 
+                                           (or (point-param-on-seg p1 p2 b) 0.0)
+                                        )
+                                      )
+                            )
+                )
                 (setq modulesFound (length found))
               )
             )
@@ -220,8 +259,8 @@
 
   ;; Fillet polyline (uses current FILLETRAD)
   ;; Apply polyline fillets only if radius > 0
-  (if (> filletRad 0.0)
-    (progn (setvar "FILLETRAD" filletRad)
+  (if (> filletRad 0.0) 
+    (progn (setvar "FILLETRAD" filletRad) 
            (command "._FILLET" "P" plObj)
     )
   )
@@ -273,90 +312,144 @@
 ;; Command
 ;; ------------------------
 
-(defun ensure-layer (name color / tbl)
-  (if (not (setq tbl (tblsearch "LAYER" name)))
+(defun ensure-layer (name color / tbl) 
+  (if (not (setq tbl (tblsearch "LAYER" name))) 
     (entmake (list '(0 . "LAYER") (cons 2 name) (cons 62 color) '(70 . 0)))
   )
   (setvar "CLAYER" name)
 )
 
 ;; Default configuration plist (user can override by altering *pvw-config* before load)
-(if (not (boundp '*pvw-config*))
-  (setq *pvw-config*
-        (list :layer "PV-STRINGS" :layer-color 131 :fillet 12.0 :label-height 6.0
-              :label-offset 6.0 :minus-block "PV_MINUS" :plus-block "PV_PLUS"
-              :minus-block-path "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg"
-              :plus-block-path "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermPlus.dwg"
-              :auto-create-blocks T))
+(if (not (boundp '*pvw-config*)) 
+  (setq *pvw-config* (list :layer "PV-STRINGS" :layer-color 131 :fillet 12.0 
+                           :label-height 6.0 :label-offset 6.0 :minus-block "PV_MINUS" 
+                           :plus-block "PV_PLUS" :minus-block-path 
+                           "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermMinus.dwg" 
+                           :plus-block-path 
+                           "S:\\1 Jobs\\1 Current Jobs\\CAD Resources\\Blocks\\SLD and Stringing\\StringTermPlus.dwg" 
+                           :auto-create-blocks T
+                     )
+  )
 )
 
-(defun pvw:cfg (key)
+(defun pvw:cfg (key) 
   (cadr (member key *pvw-config*))
 )
 
 ;; Load block from file path or create simple placeholder
-(defun pvw:ensure-block (blockName blockPath autoCreate / blockExists)
+(defun pvw:ensure-block (blockName blockPath autoCreate / blockExists) 
   (setq blockExists (tblsearch "BLOCK" blockName))
-  (cond
+  (cond 
     ;; Block already exists
-    (blockExists 
+    (blockExists
      (pvw:dbg (strcat "Block " blockName " already exists"))
-     T)
-    
+     T
+    )
+
     ;; Try to load from file path
     ((and blockPath (findfile blockPath))
      (pvw:dbg (strcat "Loading " blockName " from " blockPath))
      (command "._-INSERT" blockPath '(0 0 0) "" "" "" "")
      (command "._EXPLODE" (entlast))
      (command "._-BLOCK" blockName '(0 0 0) (ssget "_L") "")
-     T)
-    
+     T
+    )
+
     ;; Auto-create simple placeholder
     (autoCreate
      (pvw:dbg (strcat "Creating placeholder block " blockName))
      (pvw:create-simple-block blockName)
-     T)
-    
+     T
+    )
+
     ;; Skip if missing
-    (T 
+    (T
      (pvw:dbg (strcat "Block " blockName " not found - skipping"))
-     nil)
+     nil
+    )
   )
 )
 
 ;; Create a simple text-based placeholder block
-(defun pvw:create-simple-block (blockName / txtSize)
+(defun pvw:create-simple-block (blockName / txtSize) 
   (setq txtSize 6.0)
-  (entmake (list '(0 . "BLOCK") '(2 . "temp_block") '(70 . 0) '(10 0.0 0.0 0.0)))
-  (entmake (list '(0 . "TEXT") '(1 . blockName) '(8 . "0") 
-                 '(10 0.0 0.0 0.0) (cons 40 txtSize) '(50 . 0.0) '(7 . "STANDARD")))
+  (entmake 
+    (list '(0 . "BLOCK") '(2 . "temp_block") '(70 . 0) '(10 0.0 0.0 0.0))
+  )
+  (entmake 
+    (list '(0 . "TEXT") 
+          '(1 . blockName)
+          '(8 . "0")
+          '(10 0.0 0.0 0.0)
+          (cons 40 txtSize)
+          '(50 . 0.0)
+          '(7 . "STANDARD")
+    )
+  )
   (entmake '(0 . "ENDBLK"))
   (command "._-BLOCK" blockName '(0 0 0) (entlast) "")
 )
 
 ;; Error wrapper function (moved to top level to avoid nested defun issues)
-(defun pvw:err-wrapper (msg / *undoStarted* doc oldlayer oldrad oldecho oldErr)
+(defun pvw:err-wrapper (msg / *undoStarted* doc oldlayer oldrad oldecho oldErr) 
   ; Note: this is a generic wrapper - actual cleanup vars set in calling context
-  (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*")))
+  (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*"))) 
     (princ (strcat "\nError: " msg))
   )
   (princ)
 )
 
-(defun c:PVSTRINGS (/ oldlayer oldrad oldecho strLayerName strLayerColor filletRad
-                    labelHeight labelOffset minusBlockName plusBlockName modBlock
-                    effName modSSet invCount invNames strCounts modCounts invIndex
-                    strCount invModCounts strNum strName modulesNeeded invName numMods
-                    strList *undoStarted* doc oldErr tmp answer)
+;; Abort helper (top-level) - pass explicit environment for safe cleanup
+(defun pvw:abort (msg doc oldlayer oldrad oldecho oldErr undoFlag) 
+  (if msg (princ (strcat "\n" msg)))
+  (if undoFlag (vla-EndUndoMark doc))
+  (if oldlayer (setvar "CLAYER" oldlayer))
+  (if oldrad (setvar "FILLETRAD" oldrad))
+  (if oldecho (setvar "CMDECHO" oldecho))
+  (if oldErr (setq *error* oldErr))
+  (princ)
+  (exit)
+)
+
+;; Config setter utility (update or append key in *pvw-config*)
+(defun pvw:set-cfg (key val / src dst k v) 
+  (setq src *pvw-config*
+        dst nil
+  )
+  (while src 
+    (setq k   (car src)
+          v   (cadr src)
+          src (cddr src)
+    )
+    (if (= k key) 
+      (setq dst (append dst (list k val))
+            key nil
+      ) ; mark consumed
+      (setq dst (append dst (list k v)))
+    )
+  )
+  (if key (setq dst (append dst (list key val)))) ; key not found, append
+  (setq *pvw-config* dst)
+)
+
+(defun c:PVSTRINGS (/ oldlayer oldrad oldecho strLayerName strLayerColor filletRad 
+                    labelHeight labelOffset minusBlockName plusBlockName modBlock 
+                    effName modSSet invCount invNames strCounts modCounts invIndex 
+                    strCount invModCounts strNum strName modulesNeeded invName numMods 
+                    strList *undoStarted* doc oldErr tmp answer 
+                    ;; string routing locals formerly in LET
+                    p1e p2e p1 p2 foundPts ptList minusName plusName minusPt plusPt 
+                    minusAvail plusAvail
+                   ) 
 
   ;; Configurable constants
   (setq strLayerName   (pvw:cfg :layer)
-    strLayerColor  (pvw:cfg :layer-color)
-    filletRad      (pvw:cfg :fillet)
-    labelHeight    (pvw:cfg :label-height)
-    labelOffset    (pvw:cfg :label-offset)
-    minusBlockName (pvw:cfg :minus-block)
-    plusBlockName  (pvw:cfg :plus-block)
+        strLayerColor  (pvw:cfg :layer-color)
+        filletRad      (pvw:cfg :fillet)
+        labelHeight    (pvw:cfg :label-height)
+        labelOffset    (pvw:cfg :label-offset)
+        minusBlockName (pvw:cfg :minus-block)
+        plusBlockName  (pvw:cfg :plus-block)
   )
 
   ;; Save sysvars
@@ -370,225 +463,215 @@
   )
 
   (setq oldErr *error*)
-  (setq *error* 
-    (lambda (msg)
-      (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*")))
-        (princ (strcat "\nError: " msg))
-      )
-      (if *undoStarted* (vla-EndUndoMark doc))
-      (if oldlayer (setvar "CLAYER" oldlayer))
-      (if oldrad (setvar "FILLETRAD" oldrad))
-      (if oldecho (setvar "CMDECHO" oldecho))
-      (setq *error* oldErr)
-      (princ)
+  (setq *error* (lambda (msg) 
+                  (if (and msg (not (wcmatch (strcase msg) "*CANCEL*,*QUIT*"))) 
+                    (princ (strcat "\nError: " msg))
+                  )
+                  (if *undoStarted* (vla-EndUndoMark doc))
+                  (if oldlayer (setvar "CLAYER" oldlayer))
+                  (if oldrad (setvar "FILLETRAD" oldrad))
+                  (if oldecho (setvar "CMDECHO" oldecho))
+                  (setq *error* oldErr)
+                  (princ)
+                )
+  )
+
+  ;; Model space guard
+  (if (not (in-model-space-p)) 
+    (pvw:abort "WARNING: Please switch to Model Space before running PVSTRINGS." doc 
+               oldlayer oldrad oldecho oldErr *undoStarted*
     )
   )
 
-  (unwind-protect 
-    (progn 
-      ;; Model space guard
-      (if (not (in-model-space-p)) 
-        (progn 
-          (princ "\nWARNING: Please switch to Model Space before running PVSTRINGS.")
-          (exit)
-        )
-      )
+  ;; Setup
+  (setvar "CMDECHO" 0)
+  (ensure-layer strLayerName strLayerColor)
+  (setvar "FILLETRAD" filletRad)
 
-      ;; Setup
-      (setvar "CMDECHO" 0)
-      (ensure-layer strLayerName strLayerColor)
+  ;; Optional override
+  (initget "Yes No")
+  (setq answer (getkword "\nOverride defaults for Fillet/Label? [Yes/No] <No>: "))
+  (if (= answer "Yes") 
+    (progn 
+      (setq tmp (getreal (strcat "\nFillet radius <" (rtos filletRad 2 2) ">: ")))
+      (if tmp (setq filletRad tmp))
       (setvar "FILLETRAD" filletRad)
-
-      ;; Optional override of key numeric settings
-      (initget "Yes No")
-      (setq answer (getkword "\nOverride defaults for Fillet/Label? [Yes/No] <No>: "))
-      (if (= answer "Yes")
-        (progn
-          (setq tmp (safe-getint (strcat "Fillet radius <" (rtos filletRad 2 2) "): "))
-          (if tmp (setq filletRad tmp) (setvar "FILLETRAD" filletRad))
-          (setq tmp (safe-getint (strcat "Label height <" (rtos labelHeight 2 2) "): "))
-          (if tmp (setq labelHeight tmp))
-          (setq tmp (safe-getint (strcat "Label offset <" (rtos labelOffset 2 2) "): "))
-          (if tmp (setq labelOffset tmp))
-        )
-      )
-
-      ;; Single undo mark (ensure we can end it in cleanup)
-      (vla-StartUndoMark doc)
-      (setq *undoStarted* T)
-
-      ;; Ask user for module block (any instance)
-      (setq modBlock (safe-entsel "Select a module block:"))
-      (if (null modBlock) (progn (princ "\nCanceled.") (exit)))
-
-      ;; Resolve effective name (handles dynamic blocks)
-      (setq effName (get-effective-block-name modBlock))
-      (princ (strcat "\nModule effective name: " effName))
-
-      ;; Cache all modules matching effective name
-      (setq modSSet (build-mod-ss-by-effective-name effName))
-      (if (or (null modSSet) (= (sslength modSSet) 0)) 
-        (progn (princ "\nNo matching modules found.") (exit))
-      )
-
-      ;; Collect inverter/string info
-      (setq invCount (safe-getint "How many inverters? "))
-      (if (not (pvw:valid-count? invCount)) (progn (princ "\nCanceled or invalid inverter count.") (exit)))
-
-      (setq invNames  nil
-            strCounts nil
-            modCounts nil
-      )
-
-      (if (not (pvw:valid-count? invCount)) (progn (princ "\nInvalid inverter loop count.") (exit)))
-      (repeat invCount 
-        (setq invName (safe-getstring "Enter inverter name (e.g., A): "))
-        (if (null invName) (progn (princ "\nCanceled.") (exit)))
-
-        (setq strCount (safe-getint (strcat "How many strings for inverter " invName "? ")))
-        (if (not (pvw:valid-count? strCount)) (progn (princ "\nCanceled or invalid string count.") (exit)))
-
-        (setq strList nil)
-        (if (not (pvw:valid-count? strCount)) (progn (princ "\nInvalid string repeat count.") (exit)))
-        (repeat strCount 
-          (setq numMods (safe-getint 
-                          (strcat "Number of modules for next string of inverter " 
-                                  invName
-                                  ": "
-                          )
-                        )
-          )
-          (if (not (pvw:valid-count? numMods)) (progn (princ "\nCanceled or invalid module count.") (exit)))
-          ;; use cons for speed, reverse later
-          (setq strList (cons numMods strList))
-        )
-        (setq strList (reverse strList))
-        (setq invNames (append invNames (list invName)))
-        (setq strCounts (append strCounts (list strCount)))
-        (setq modCounts (append modCounts (list strList)))
-      )
-
-      ;; ------------------------
-      ;; Loop through inverters/strings
-      ;; ------------------------
-      (setq invIndex -1)
-      (foreach invName invNames 
-        (setq invIndex     (1+ invIndex)
-              strCount     (nth invIndex strCounts)
-              invModCounts (nth invIndex modCounts)
-              strNum       0
-        )
-
-        (if (not (pvw:valid-count? strCount)) (progn (princ "\nInvalid per-inverter string count.") (exit)))
-        (repeat strCount 
-          (setq strNum        (1+ strNum)
-                strName       (strcat "STRING " invName "-" (itoa strNum))
-                modulesNeeded (nth (1- strNum) invModCounts)
-          )
-          (if (not (pvw:valid-count? modulesNeeded)) (progn (princ "\nInvalid modulesNeeded value.") (exit)))
-
-          (princ 
-            (strcat "\nNow processing: " 
-                    strName
-                    " ("
-                    (itoa modulesNeeded)
-                    " modules)"
-            )
-          )
-
-          ;; ------------------------
-          ;; IMPLEMENTED TODO SECTION (interactive routing)
-          ;; ------------------------
-          (let (p1e p2e p1 p2 foundPts ptList minusName plusName minusPt plusPt)
-
-            ;; Resolve configurable +/- block names (with defaults if not bound)
-            (setq minusName (if (and (boundp 'minusBlockName) minusBlockName) 
-                              minusBlockName
-                              "PV_MINUS"
-                            )
-            )
-            (setq plusName (if (and (boundp 'plusBlockName) plusBlockName) 
-                             plusBlockName
-                             "PV_PLUS"
-                           )
-            )
-
-            ;; Pick FIRST module
-            (while 
-              (progn 
-                (setq p1e (safe-entsel "Pick FIRST module of the string:"))
-                (if (not (is-mod-insert? p1e modSSet)) 
-                  (progn (princ "\nPlease pick a valid module of the selected type.") 
-                         T
-                  )
-                  nil
-                )
-              )
-            )
-            (if (null p1e) (progn (princ "\nCanceled.") (exit)))
-            (setq p1 (inspt-of p1e))
-
-            ;; Pick LAST module
-            (while 
-              (progn 
-                (setq p2e (safe-entsel "Pick LAST module of the string:"))
-                (if (not (is-mod-insert? p2e modSSet)) 
-                  (progn (princ "\nPlease pick a valid module of the selected type.") 
-                         T
-                  )
-                  nil
-                )
-              )
-            )
-            (if (null p2e) (progn (princ "\nCanceled.") (exit)))
-            (setq p2 (inspt-of p2e))
-
-            ;; Build ordered run along the line (including endpoints)
-            (setq foundPts (get-collinear-modules p1 p2 modSSet))
-            (if (not (equal (car foundPts) p1 *pv-eps*)) (setq foundPts (cons p1 (vl-remove p1 foundPts))))
-            (if (not (equal (car (last foundPts)) p2 *pv-eps*)) (setq foundPts (append (vl-remove p2 foundPts) (list p2))))
-            (setq foundPts (pvw:adjust-modules foundPts modulesNeeded p1 p2 modSSet))
-
-            ;; Final list of points to route
-            (setq ptList foundPts)
-
-            ;; Ensure +/- blocks exist (load from path or create placeholder)
-            (setq minusAvail (pvw:ensure-block minusName (pvw:cfg :minus-block-path) (pvw:cfg :auto-create-blocks))
-                  plusAvail  (pvw:ensure-block plusName (pvw:cfg :plus-block-path) (pvw:cfg :auto-create-blocks)))
-
-            ;; Insert +/- blocks if available
-            (if minusAvail
-              (progn 
-                (setq minusPt (car ptList)) 
-                (if minusPt (command "._-INSERT" minusName minusPt 1.0 1.0 0.0))
-              )
-            )
-            (if plusAvail
-              (progn 
-                (setq plusPt (car (last ptList))) 
-                (if plusPt (command "._-INSERT" plusName plusPt 1.0 1.0 0.0))
-              )
-            )
-
-            ;; Draw + label
-            (draw-and-label-string ptList strName filletRad labelHeight labelOffset)
-          )
-          ;; ------------------------
-          ;; END IMPLEMENTED TODO
-          ;; ------------------------
-        )
-      )
-    )
-
-    ;; Cleanup (always)
-    (progn 
-      (if *undoStarted* (vla-EndUndoMark doc))
-      (setvar "CLAYER" oldlayer)
-      (setvar "FILLETRAD" oldrad)
-      (setvar "CMDECHO" oldecho)
-      (setq *error* oldErr)
+      (setq tmp (getreal (strcat "\nLabel height <" (rtos labelHeight 2 2) ">: ")))
+      (if tmp (setq labelHeight tmp))
+      (setq tmp (getreal (strcat "\nLabel offset <" (rtos labelOffset 2 2) ">: ")))
+      (if tmp (setq labelOffset tmp))
     )
   )
+
+  ;; Undo mark
+  (vla-StartUndoMark doc)
+  (setq *undoStarted* T)
+
+  ;; Module block selection
+  (setq modBlock (safe-entsel "Select a module block:"))
+  (if (null modBlock) 
+    (pvw:abort "Canceled." doc oldlayer oldrad oldecho oldErr *undoStarted*)
+  )
+
+  (setq effName (get-effective-block-name modBlock))
+  (princ (strcat "\nModule effective name: " effName))
+  (setq modSSet (build-mod-ss-by-effective-name effName))
+  (if (or (null modSSet) (= (sslength modSSet) 0)) 
+    (pvw:abort "No matching modules found." doc oldlayer oldrad oldecho oldErr 
+               *undoStarted*
+    )
+  )
+
+  ;; Inverter/string info
+  (setq invCount (safe-getint "How many inverters? "))
+  (if (not (pvw:valid-count? invCount)) 
+    (pvw:abort "Canceled or invalid inverter count." doc oldlayer oldrad oldecho 
+               oldErr *undoStarted*
+    )
+  )
+
+  (setq invNames  nil
+        strCounts nil
+        modCounts nil
+  )
+  (repeat invCount 
+    (setq invName (safe-getstring "Enter inverter name (e.g., A): "))
+    (if (null invName) 
+      (pvw:abort "Canceled." doc oldlayer oldrad oldecho oldErr *undoStarted*)
+    )
+    (setq strCount (safe-getint 
+                     (strcat "How many strings for inverter " invName "? ")
+                   )
+    )
+    (if (not (pvw:valid-count? strCount)) 
+      (pvw:abort "Canceled or invalid string count." doc oldlayer oldrad oldecho 
+                 oldErr *undoStarted*
+      )
+    )
+    (setq strList nil)
+    (repeat strCount 
+      (setq numMods (safe-getint 
+                      (strcat "Number of modules for next string of inverter " 
+                              invName
+                              ": "
+                      )
+                    )
+      )
+      (if (not (pvw:valid-count? numMods)) 
+        (pvw:abort "Canceled or invalid module count." doc oldlayer oldrad oldecho 
+                   oldErr *undoStarted*
+        )
+      )
+      (setq strList (cons numMods strList))
+    )
+    (setq strList (reverse strList))
+    (setq invNames  (append invNames (list invName))
+          strCounts (append strCounts (list strCount))
+          modCounts (append modCounts (list strList))
+    )
+  )
+
+  ;; Process inverters
+  (setq invIndex -1)
+  (foreach invName invNames 
+    (setq invIndex     (1+ invIndex)
+          strCount     (nth invIndex strCounts)
+          invModCounts (nth invIndex modCounts)
+          strNum       0
+    )
+    (if (not (pvw:valid-count? strCount)) 
+      (pvw:abort "Invalid per-inverter string count." doc oldlayer oldrad oldecho 
+                 oldErr *undoStarted*
+      )
+    )
+    (repeat strCount 
+      (setq strNum        (1+ strNum)
+            strName       (strcat "STRING " invName "-" (itoa strNum))
+            modulesNeeded (nth (1- strNum) invModCounts)
+      )
+      (if (not (pvw:valid-count? modulesNeeded)) 
+        (pvw:abort "Invalid modulesNeeded value." doc oldlayer oldrad oldecho oldErr 
+                   *undoStarted*
+        )
+      )
+      (princ 
+        (strcat "\nNow processing: " strName " (" (itoa modulesNeeded) " modules)")
+      )
+
+      ;; Resolve +/- names
+      (setq minusName minusBlockName
+            plusName  plusBlockName
+      )
+
+      ;; FIRST module
+      (while 
+        (progn (setq p1e (safe-entsel "Pick FIRST module of the string:")) 
+               (if (not (is-mod-insert? p1e modSSet)) 
+                 (princ "\nPlease pick a valid module of the selected type.")
+                 T
+               )
+        )
+      )
+      (if (null p1e) 
+        (pvw:abort "Canceled." doc oldlayer oldrad oldecho oldErr *undoStarted*)
+      )
+      (setq p1 (inspt-of p1e))
+
+      ;; LAST module
+      (while 
+        (progn (setq p2e (safe-entsel "Pick LAST module of the string:")) 
+               (if (not (is-mod-insert? p2e modSSet)) 
+                 (princ "\nPlease pick a valid module of the selected type.")
+                 T
+               )
+        )
+      )
+      (if (null p2e) 
+        (pvw:abort "Canceled." doc oldlayer oldrad oldecho oldErr *undoStarted*)
+      )
+      (setq p2 (inspt-of p2e))
+
+      ;; Build run
+      (setq foundPts (get-collinear-modules p1 p2 modSSet))
+      (if (not (equal (car foundPts) p1 *pv-eps*)) 
+        (setq foundPts (cons p1 (vl-remove p1 foundPts)))
+      )
+      (if (not (equal (car (last foundPts)) p2 *pv-eps*)) 
+        (setq foundPts (append (vl-remove p2 foundPts) (list p2)))
+      )
+      (setq foundPts (pvw:adjust-modules foundPts modulesNeeded p1 p2 modSSet))
+      (setq ptList foundPts)
+
+      ;; Ensure blocks
+      (setq minusAvail (pvw:ensure-block 
+                         minusName
+                         (pvw:cfg :minus-block-path)
+                         (pvw:cfg :auto-create-blocks)
+                       )
+            plusAvail  (pvw:ensure-block 
+                         plusName
+                         (pvw:cfg :plus-block-path)
+                         (pvw:cfg :auto-create-blocks)
+                       )
+      )
+      (if minusAvail (setq minusPt (car ptList)) (setq minusPt nil))
+      (if (and minusAvail minusPt) 
+        (command "._-INSERT" minusName minusPt 1.0 1.0 0.0)
+      )
+      (if plusAvail (setq plusPt (car (last ptList))) (setq plusPt nil))
+      (if (and plusAvail plusPt) (command "._-INSERT" plusName plusPt 1.0 1.0 0.0))
+
+      ;; Draw / label
+      (draw-and-label-string ptList strName filletRad labelHeight labelOffset)
+    )
+  )
+
+  ;; Cleanup
+  (if *undoStarted* (vla-EndUndoMark doc))
+  (setvar "CLAYER" oldlayer)
+  (setvar "FILLETRAD" oldrad)
+  (setvar "CMDECHO" oldecho)
+  (setq *error* oldErr)
   (princ)
 )
 
@@ -597,79 +680,80 @@
 (princ)
 
 ;; Configuration command
-(defun c:PVWCONFIG (/ choice filePath)
+(defun c:PVWCONFIG (/ choice filePath) 
   (princ "\n=== PV Stringing Wizard Configuration ===")
   (princ (strcat "\nCurrent minus block: " (pvw:cfg :minus-block)))
   (princ (strcat "\nCurrent plus block: " (pvw:cfg :plus-block)))
-  (princ (strcat "\nMinus block path: " (if (pvw:cfg :minus-block-path) (pvw:cfg :minus-block-path) "None")))
-  (princ (strcat "\nPlus block path: " (if (pvw:cfg :plus-block-path) (pvw:cfg :plus-block-path) "None")))
-  (princ (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No")))
-  
+  (princ 
+    (strcat "\nMinus block path: " 
+            (if (pvw:cfg :minus-block-path) (pvw:cfg :minus-block-path) "None")
+    )
+  )
+  (princ 
+    (strcat "\nPlus block path: " 
+            (if (pvw:cfg :plus-block-path) (pvw:cfg :plus-block-path) "None")
+    )
+  )
+  (princ 
+    (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No"))
+  )
   (initget "M P A Q")
   (setq choice (getkword "\nConfigure [M]inus path / [P]lus path / [A]uto-create toggle / [Q]uit: "))
-  
-  (cond
+  (cond 
     ((= choice "M")
      (setq filePath (getfiled "Select Minus Block File" "" "dwg" 0))
-     (if filePath
-       (progn
-         (setq *pvw-config* (subst (cons :minus-block-path filePath) 
-                                   (assoc :minus-block-path (apply 'list (pvw:plist->alist *pvw-config*)))
-                                   (apply 'list (pvw:plist->alist *pvw-config*))))
-         (princ (strcat "\nMinus block path set to: " filePath))
+     (if filePath 
+       (progn (pvw:set-cfg :minus-block-path filePath) 
+              (princ (strcat "\nMinus block path set to: " filePath))
        )
-       (princ "\nCanceled.")
      )
-    )
-    ((= choice "P")
-     (setq filePath (getfiled "Select Plus Block File" "" "dwg" 0))
-     (if filePath
-       (progn
-         (setq *pvw-config* (subst (cons :plus-block-path filePath) 
-                                   (assoc :plus-block-path (apply 'list (pvw:plist->alist *pvw-config*)))
-                                   (apply 'list (pvw:plist->alist *pvw-config*))))
-         (princ (strcat "\nPlus block path set to: " filePath))
+     ((= choice "P") 
+       (setq filePath (getfiled "Select Plus Block File" "" "dwg" 0))
+       (if filePath 
+         (progn (pvw:set-cfg :plus-block-path filePath) 
+                (princ (strcat "\nPlus block path set to: " filePath))
+         )
        )
-       (princ "\nCanceled.")
+       ((= choice "A") 
+         (pvw:set-cfg :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
+         (princ 
+           (strcat "\nAuto-create blocks: " 
+                   (if (pvw:cfg :auto-create-blocks) "Enabled" "Disabled")
+           )
+         )
+       )
      )
+     (princ)
     )
-    ((= choice "A")
-     (setq *pvw-config* (subst (cons :auto-create-blocks (not (pvw:cfg :auto-create-blocks)))
-                               (assoc :auto-create-blocks (apply 'list (pvw:plist->alist *pvw-config*)))
-                               (apply 'list (pvw:plist->alist *pvw-config*))))
-     (princ (strcat "\nAuto-create blocks: " (if (pvw:cfg :auto-create-blocks) "Yes" "No")))
-    )
-  )
-  (princ)
-)
 
-;; Helper to convert plist to alist for easier manipulation
-(defun pvw:plist->alist (plist / result)
-  (while plist
-    (setq result (cons (cons (car plist) (cadr plist)) result)
-          plist  (cddr plist))
-  )
-  (reverse result)
-)
-
-;;; Debug utility (optional): quick paren balance checker for this file once loaded
-(defun c:PVWBALANCE (/ fn txt i ch open close)
-  (setq fn (findfile "stringing-wizard/scripts/pvw-stringing-wizard.lsp"))
-  (if (not fn) (princ "\nFile not found in expected relative path.")
-    (progn
-      (setq txt  (vl-file->string fn)
-            i    0
-            open 0
-            close 0)
-      (while (< i (strlen txt))
-        (setq ch (substr txt (1+ i) 1))
-        (cond ((= ch "(") (setq open (1+ open)))
-              ((= ch ")") (setq close (1+ close))))
-        (setq i (1+ i))
+    ;;; Debug utility (optional): quick paren balance checker for this file once loaded
+    (defun c:PVWBALANCE (/ fn txt i ch open close) 
+      (setq fn (findfile "stringing-wizard/scripts/pvw-stringing-wizard.lsp"))
+      (if (not fn) 
+        (princ "\nFile not found in expected relative path.")
+        (progn 
+          (setq txt   (vl-file->string fn)
+                i     0
+                open  0
+                close 0
+          )
+          (while (< i (strlen txt)) 
+            (setq ch (substr txt (1+ i) 1))
+            (cond 
+              ((= ch "(") (setq open (1+ open)))
+              ((= ch ")") (setq close (1+ close)))
+            )
+            (setq i (1+ i))
+          )
+          (princ 
+            (strcat "\nParens open:" 
+                    (itoa open)
+                    " close:"
+                    (itoa close)
+                    (if (= open close) " (balanced)" " (MISMATCH)")
+            )
+          )
+        )
       )
-      (princ (strcat "\nParens open:" (itoa open) " close:" (itoa close)
-                     (if (= open close) " (balanced)" " (MISMATCH)")))
+      (princ)
     )
-  )
-  (princ)
-)
