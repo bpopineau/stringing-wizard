@@ -31,32 +31,32 @@
 (defun in-model-space-p () (> (getvar "CVPORT") 1))
 
 ;; Safe input wrappers
-(defun safe-entsel (msg / res)
+(defun safe-entsel (msg / res) 
   (princ (strcat "\n" msg))
   (setq res (vl-catch-all-apply 'entsel (list)))
-  (if (vl-catch-all-error-p res)
+  (if (vl-catch-all-error-p res) 
     nil
     (car res) ; entsel returns (ename point)
   )
 )
 
-(defun safe-getint (msg / res)
+(defun safe-getint (msg / res) 
   (setq res (vl-catch-all-apply 'getint (list (strcat "\n" msg))))
-  (if (vl-catch-all-error-p res)
+  (if (vl-catch-all-error-p res) 
     nil
     (if (or (null res) (< res 0)) nil res)
   )
 )
 
-(defun safe-getstring (msg / res)
+(defun safe-getstring (msg / res) 
   (setq res (vl-catch-all-apply 'getstring (list T (strcat "\n" msg))))
-  (if (vl-catch-all-error-p res)
+  (if (vl-catch-all-error-p res) 
     nil
     (if (or (null res) (= res "")) nil res)
   )
 )
 
-(defun safe-getkword (msg / res)
+(defun safe-getkword (msg / res) 
   (setq res (vl-catch-all-apply 'getkword (list msg)))
   (if (vl-catch-all-error-p res) nil res)
 )
@@ -158,8 +158,8 @@
         overallPt  nil
   )
 
-  (if (> (length ptList) 1)
-    (progn
+  (if (> (length ptList) 1) 
+    (progn 
       ;; Draw polyline
       (command "._PLINE")
       (foreach pt ptList (command pt))
@@ -170,14 +170,18 @@
       (command "._FILLET" "P" plObj)
     )
     ;; Single point: set a reasonable label point above
-    (if ptList
-      (setq labelPt (list (car (car ptList)) (+ (cadr (car ptList)) labelOffset) 0.0))
+    (if ptList 
+      (setq labelPt (list (car (car ptList)) 
+                          (+ (cadr (car ptList)) labelOffset)
+                          0.0
+                    )
+      )
     )
   )
 
   ;; Find longest horizontal segment (fallback to longest overall)
-  (if (> (length ptList) 1)
-    (progn
+  (if (> (length ptList) 1) 
+    (progn 
       (setq i 0)
       (while (< (1+ i) (length ptList)) 
         (setq p1     (nth i ptList)
@@ -244,11 +248,11 @@
   )
 
   ;; Save sysvars
-  (setq oldlayer (getvar "CLAYER")
-    oldrad   (getvar "FILLETRAD")
-    oldecho  (getvar "CMDECHO")
-    oldattdia (getvar "ATTDIA")
-    oldattreq (getvar "ATTREQ")
+  (setq oldlayer  (getvar "CLAYER")
+        oldrad    (getvar "FILLETRAD")
+        oldecho   (getvar "CMDECHO")
+        oldattdia (getvar "ATTDIA")
+        oldattreq (getvar "ATTREQ")
   )
 
   (setq *undoStarted* nil
@@ -461,7 +465,10 @@
                 )
               )
               (initget "A R M C") ; Accept / Repick last / Manual adjust / Cancel
-              (setq ans (safe-getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
+              (setq ans (safe-getkword 
+                          "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "
+                        )
+              )
 
               (cond 
                 ;; Cancel
