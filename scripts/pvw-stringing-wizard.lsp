@@ -393,7 +393,7 @@
 )
 
 ;; Abort helper (top-level) - pass explicit environment for safe cleanup
-(defun pvw:abort (msg doc oldlayer oldrad oldecho oldErr undoFlag)
+(defun pvw:abort (msg doc oldlayer oldrad oldecho oldErr undoFlag) 
   ;; Graceful abort: perform cleanup but DO NOT call (exit). Return nil so caller can decide flow.
   (if msg (princ (strcat "\n" msg)))
   (if undoFlag (vla-EndUndoMark doc))
@@ -402,7 +402,8 @@
   (if oldecho (setvar "CMDECHO" oldecho))
   (if oldErr (setq *error* oldErr))
   (princ)
-  nil)
+  nil
+)
 
 ;; Config setter utility (update or append key in *pvw-config*)
 (defun pvw:set-cfg (key val / src dst k v) 
