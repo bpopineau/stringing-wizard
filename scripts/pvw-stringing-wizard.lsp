@@ -16,6 +16,9 @@
 ;;;   - Explicit geometric tolerance
 ;;; ==========================================================
 
+;; Ensure Visual LISP COM is available
+(vl-load-com)
+
 ;; ------------------------
 ;; Utility / Config
 ;; ------------------------
@@ -28,21 +31,34 @@
 (defun in-model-space-p () (> (getvar "CVPORT") 1))
 
 ;; Safe input wrappers
-(defun safe-entsel (msg) 
+(defun safe-entsel (msg / res)
   (princ (strcat "\n" msg))
-  (vl-catch-all-apply 
-    (function (lambda () (car (entsel))))
+  (setq res (vl-catch-all-apply 'entsel (list)))
+  (if (vl-catch-all-error-p res)
+    nil
+    (car res) ; entsel returns (ename point)
   )
 )
 
-(defun safe-getint (msg / v) 
-  (setq v (getint (strcat "\n" msg)))
-  (if (or (null v) (< v 0)) nil v)
+(defun safe-getint (msg / res)
+  (setq res (vl-catch-all-apply 'getint (list (strcat "\n" msg))))
+  (if (vl-catch-all-error-p res)
+    nil
+    (if (or (null res) (< res 0)) nil res)
+  )
 )
 
-(defun safe-getstring (msg / s) 
-  (setq s (getstring T (strcat "\n" msg)))
-  (if (or (null s) (= s "")) nil s)
+(defun safe-getstring (msg / res)
+  (setq res (vl-catch-all-apply 'getstring (list T (strcat "\n" msg))))
+  (if (vl-catch-all-error-p res)
+    nil
+    (if (or (null res) (= res "")) nil res)
+  )
+)
+
+(defun safe-getkword (msg / res)
+  (setq res (vl-catch-all-apply 'getkword (list msg)))
+  (if (vl-catch-all-error-p res) nil res)
 )
 
 ;; Get Effective (dynamic) block name, falling back to Name
@@ -59,7 +75,7 @@
 ;; Build a selection set of INSERTs matching a given EffectiveName (robust for dynamic blocks)
 (defun build-mod-ss-by-effective-name (effName / all i v eff ss en) 
   (setq ss (ssadd))
-  (if (setq all (ssget "_X" '((0 . "INSERT")))) 
+  (if (setq all (ssget "_X" '((0 . "INSERT") (410 . "Model")))) 
     (progn 
       (setq i 0)
       (while (< i (sslength all)) 
@@ -142,47 +158,59 @@
         overallPt  nil
   )
 
-  ;; Draw polyline
-  (command "._PLINE")
-  (foreach pt ptList (command pt))
-  (command "")
-  (setq plObj (entlast))
+  (if (> (length ptList) 1)
+    (progn
+      ;; Draw polyline
+      (command "._PLINE")
+      (foreach pt ptList (command pt))
+      (command "")
+      (setq plObj (entlast))
 
-  ;; Fillet polyline (uses current FILLETRAD)
-  (command "._FILLET" "P" plObj)
+      ;; Fillet polyline (uses current FILLETRAD)
+      (command "._FILLET" "P" plObj)
+    )
+    ;; Single point: set a reasonable label point above
+    (if ptList
+      (setq labelPt (list (car (car ptList)) (+ (cadr (car ptList)) labelOffset) 0.0))
+    )
+  )
 
   ;; Find longest horizontal segment (fallback to longest overall)
-  (setq i 0)
-  (while (< (1+ i) (length ptList)) 
-    (setq p1     (nth i ptList)
-          p2     (nth (1+ i) ptList)
-          segLen (distance p1 p2)
-          horiz  (horizontal? p1 p2)
-    )
-
-    (if (and horiz (> segLen maxLen)) 
-      (progn 
-        (setq maxLen segLen)
-        (setq labelPt (list (/ (+ (car p1) (car p2)) 2.0) 
-                            (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
-                            0.0
-                      )
+  (if (> (length ptList) 1)
+    (progn
+      (setq i 0)
+      (while (< (1+ i) (length ptList)) 
+        (setq p1     (nth i ptList)
+              p2     (nth (1+ i) ptList)
+              segLen (distance p1 p2)
+              horiz  (horizontal? p1 p2)
         )
+
+        (if (and horiz (> segLen maxLen)) 
+          (progn 
+            (setq maxLen segLen)
+            (setq labelPt (list (/ (+ (car p1) (car p2)) 2.0) 
+                                (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
+                                0.0
+                          )
+            )
+          )
+        )
+
+        (if (> segLen maxOverall) 
+          (progn 
+            (setq maxOverall segLen)
+            (setq overallPt (list (/ (+ (car p1) (car p2)) 2.0) 
+                                  (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
+                                  0.0
+                            )
+            )
+          )
+        )
+
+        (setq i (1+ i))
       )
     )
-
-    (if (> segLen maxOverall) 
-      (progn 
-        (setq maxOverall segLen)
-        (setq overallPt (list (/ (+ (car p1) (car p2)) 2.0) 
-                              (+ (/ (+ (cadr p1) (cadr p2)) 2.0) labelOffset)
-                              0.0
-                        )
-        )
-      )
-    )
-
-    (setq i (1+ i))
   )
 
   ;; Fallback if no horizontal
@@ -202,7 +230,7 @@
                     labelHeight labelOffset minusBlockName plusBlockName modBlock 
                     effName modSSet invCount invNames strCounts modCounts invIndex 
                     strCount invModCounts strNum strName modulesNeeded invName numMods 
-                    strList *undoStarted* doc
+                    strList *undoStarted* doc idx strIdx oldattdia oldattreq
                    ) 
 
   ;; Configurable constants
@@ -217,8 +245,10 @@
 
   ;; Save sysvars
   (setq oldlayer (getvar "CLAYER")
-        oldrad   (getvar "FILLETRAD")
-        oldecho  (getvar "CMDECHO")
+    oldrad   (getvar "FILLETRAD")
+    oldecho  (getvar "CMDECHO")
+    oldattdia (getvar "ATTDIA")
+    oldattreq (getvar "ATTREQ")
   )
 
   (setq *undoStarted* nil
@@ -237,6 +267,9 @@
 
       ;; Setup
       (setvar "CMDECHO" 0)
+      ;; Avoid attribute prompts during -INSERT of +/- blocks
+      (setvar "ATTDIA" 0)
+      (setvar "ATTREQ" 0)
       (if (tblsearch "LAYER" strLayerName) 
         (command "._LAYER" "S" strLayerName "")
         (command "._LAYER" "M" strLayerName "C" strLayerColor strLayerName "")
@@ -261,7 +294,13 @@
         (progn (princ "\nNo matching modules found.") (exit))
       )
 
-      ;; Collect inverter/string info
+      ;; ------------------------
+      ;; Collect inverter/string info (3-pass input flow)
+      ;; 1) Names for all inverters
+      ;; 2) String counts per inverter
+      ;; 3) Module counts per string (by inverter & string number)
+      ;; ------------------------
+
       (setq invCount (safe-getint "How many inverters? "))
       (if (null invCount) (progn (princ "\nCanceled or invalid.") (exit)))
 
@@ -270,34 +309,55 @@
             modCounts nil
       )
 
+      ;; 1) Inverter names
+      (setq idx 1)
       (repeat invCount 
-        (setq invName (safe-getstring "Enter inverter name (e.g., A): "))
+        (setq invName (safe-getstring 
+                        (strcat "Enter inverter name #" (itoa idx) " (e.g., A): ")
+                      )
+        )
         (if (null invName) (progn (princ "\nCanceled.") (exit)))
+        (setq invNames (append invNames (list invName)))
+        (setq idx (1+ idx))
+      )
 
+      ;; 2) String counts per inverter
+      (foreach invName invNames 
         (setq strCount (safe-getint 
                          (strcat "How many strings for inverter " invName "? ")
                        )
         )
         (if (null strCount) (progn (princ "\nCanceled or invalid.") (exit)))
+        (setq strCounts (append strCounts (list strCount)))
+      )
 
+      ;; 3) Module counts for each inverter's strings
+      (setq invIndex -1)
+      (foreach invName invNames 
+        (setq invIndex (1+ invIndex))
+        (setq strCount (nth invIndex strCounts))
         (setq strList nil)
+
+        (setq strIdx 1)
         (repeat strCount 
           (setq numMods (safe-getint 
-                          (strcat "Number of modules for next string of inverter " 
+                          (strcat "Number of modules for " 
                                   invName
+                                  "-"
+                                  (itoa strIdx)
                                   ": "
                           )
                         )
           )
           (if (null numMods) (progn (princ "\nCanceled or invalid.") (exit)))
-          ;; use cons for speed, reverse later
-          (setq strList (cons numMods strList))
+          (setq strList (append strList (list numMods)))
+          (setq strIdx (1+ strIdx))
         )
-        (setq strList (reverse strList))
-        (setq invNames (append invNames (list invName)))
-        (setq strCounts (append strCounts (list strCount)))
+
+        ;; modCounts is a list of lists, aligned with invNames/strCounts
         (setq modCounts (append modCounts (list strList)))
       )
+
 
       ;; ------------------------
       ;; Loop through inverters/strings
@@ -401,7 +461,7 @@
                 )
               )
               (initget "A R M C") ; Accept / Repick last / Manual adjust / Cancel
-              (setq ans (getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
+              (setq ans (safe-getkword "\n[A]ccept / [R]epick last / [M]anual adjust / [C]ancel: "))
 
               (cond 
                 ;; Cancel
@@ -470,12 +530,13 @@
                               "Pick extra modules on the same line (Esc to stop)."
                       )
                     )
-                    (while (< modulesFound need) 
+                    (setq keepAdding T)
+                    (while (and keepAdding (< modulesFound need)) 
                       (setq p2e (safe-entsel "Pick an extra module to include:"))
                       (if (not (is-mod-insert? p2e modSSet)) 
                         (progn (princ "\nInvalid pick or canceled; stopping manual add.") 
-                               (setq modulesFound need)
-                        ) ; break
+                               (setq keepAdding nil)
+                        ) ; stop adding, return to mismatch prompt
                         (progn 
                           (setq foundPts (sort-points-along-line 
                                            p1
@@ -526,6 +587,8 @@
       (setvar "CLAYER" oldlayer)
       (setvar "FILLETRAD" oldrad)
       (setvar "CMDECHO" oldecho)
+      (setvar "ATTDIA" oldattdia)
+      (setvar "ATTREQ" oldattreq)
     )
   )
   (princ)
